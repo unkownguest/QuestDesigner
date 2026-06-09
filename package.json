@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
+    "setup:worktree": "node scripts/setup-worktree.cjs",
     "preview": "vite preview",
     "smoke": "node scripts/smoke-test.cjs",
     "smoke:api": "node scripts/api-smoke-test.cjs"

@@ -18,6 +18,26 @@ npm install
 npm run dev
 ```
 
+## New Worktree Setup
+
+This repository uses **npm** (detected from `package-lock.json`) and includes an automated setup script for fresh worktrees:
+
+```bash
+git worktree add ../narrative-forge-work <branch-or-commit>
+cd ../narrative-forge-work
+npm run setup:worktree
+```
+
+The setup script:
+
+- installs dependencies (`npm ci`)
+- creates missing local env files:
+  - `.env.local` from `.env.example`
+  - `api/.env.local` from `api/.env.example`
+- runs `npm run build`
+
+You can rerun `npm run setup:worktree` at any time; existing files are preserved unless missing.
+
 ## Check
 
 ```bash
