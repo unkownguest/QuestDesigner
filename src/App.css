@@ -299,6 +299,38 @@ button:disabled {
   background: #101217;
 }
 
+.world-map-mode-switch {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  margin-left: 8px;
+}
+
+.world-map-mode-switch button {
+  min-height: 28px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.world-map-mode-switch button.is-active {
+  border-color: #6cb6ff;
+  color: #08111c;
+  background: #6cb6ff;
+}
+
+.world-map-canvas--3d {
+  transform: translateZ(0);
+  filter: saturate(1.06) contrast(1.04);
+}
+
+.world-map-label {
+  paint-order: stroke;
+  stroke: #111318;
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  font-variant-numeric: tabular-nums;
+}
+
 .toolkit-grid--wide {
   grid-template-columns: minmax(0, 1.3fr) minmax(320px, 0.7fr);
 }
