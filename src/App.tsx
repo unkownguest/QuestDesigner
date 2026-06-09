@@ -1,4 +1,4 @@
-import {
+﻿import {
   addEdge,
   applyEdgeChanges,
   applyNodeChanges,
@@ -26,6 +26,7 @@ import {
   BookOpenText,
   CheckCircle2,
   ClipboardList,
+  ChevronDown,
   Download,
   Flag,
   Gift,
@@ -75,6 +76,9 @@ type QuestNodeData = {
   character?: string
   eventType?: QuestEventType
   reward?: string
+  questId?: string
+  questObjectiveId?: string
+  mapLocationId?: string
   variableName?: string
   variableValue?: string
   comparison?: CompareMode
@@ -111,6 +115,47 @@ type QuestRecord = {
   status: QuestEventType
   objectives: string
   rewards: string
+  locationId?: string
+  stages?: QuestObjective[]
+  linkedNodeIds?: string[]
+}
+
+type QuestObjective = {
+  id: string
+  title: string
+  description: string
+  completed: boolean
+}
+
+type WorldRegion = {
+  id: string
+  name: string
+  color?: string
+}
+
+type MapLocationType = 'town' | 'city' | 'village' | 'camp' | 'dungeon' | 'landmark' | 'region'
+type MapRouteType = 'road' | 'trail' | 'river' | 'sea' | 'hidden'
+
+type WorldMapLocation = {
+  id: string
+  name: string
+  type: MapLocationType
+  x: number
+  y: number
+  region?: string
+  faction?: string
+  description: string
+  linkedQuestIds: string[]
+  linkedCharacterIds: string[]
+}
+
+type WorldMapRoute = {
+  id: string
+  fromLocationId: string
+  toLocationId: string
+  type: MapRouteType
+  danger: 'safe' | 'contested' | 'dangerous'
+  label?: string
 }
 
 type CharacterRecord = {
@@ -120,8 +165,11 @@ type CharacterRecord = {
   personality: string
   faction: string
   location: string
+  homeLocationId?: string
   backstory: string
   dialogueStyle: string
+  notes: string
+  avatarColor: string
 }
 
 type WorldRecord = {
@@ -131,6 +179,10 @@ type WorldRecord = {
   factions: string
   mainConflict: string
   setting: string
+  toneStyle: string
+  mapRegions: WorldRegion[]
+  mapLocations: WorldMapLocation[]
+  mapRoutes: WorldMapRoute[]
 }
 
 type GeneratorForm = {
@@ -169,7 +221,22 @@ type PreviewState = {
   finished: boolean
 }
 
+type ProjectSnapshot = {
+  id: string
+  title: string
+  lastSavedAt: string
+  nodesCount: number
+  edgesCount: number
+}
+
+type ProjectCatalog = {
+  activeProjectId: string
+  projects: ProjectSnapshot[]
+}
+
 const STORAGE_KEY = 'quest-designer-project'
+const PROJECT_CATALOG_KEY = 'narrative-forge-project-catalog'
+const PROJECT_STORAGE_PREFIX = 'narrative-forge-project:'
 const QUESTS_STORAGE_KEY = 'narrative-forge-quests'
 const CHARACTERS_STORAGE_KEY = 'narrative-forge-characters'
 const WORLD_STORAGE_KEY = 'narrative-forge-world'
@@ -263,8 +330,30 @@ const sampleQuests: QuestRecord[] = [
     description: 'Relight the abandoned watchtower beacon so travelers can cross the road safely.',
     giver: 'Mira',
     status: 'start',
+    locationId: 'map-camp-1',
     objectives: 'Reach the tower\nFind dry oil\nRelight the beacon',
     rewards: '120 XP\nRanger Charm\nSafe road unlocked',
+    stages: [
+      {
+        id: 'stage-beacon-start',
+        title: 'Reach the camp',
+        description: 'Talk to Mira and accept the request.',
+        completed: true,
+      },
+      {
+        id: 'stage-beacon-journey',
+        title: 'Restore the signal',
+        description: 'Find the watchtower and relight the lamp.',
+        completed: false,
+      },
+      {
+        id: 'stage-beacon-return',
+        title: 'Return',
+        description: 'Report progress to Mira and collect reward.',
+        completed: false,
+      },
+    ],
+    linkedNodeIds: ['start-1', 'quest-1', 'objective-1', 'end-success'],
   },
 ]
 
@@ -276,10 +365,91 @@ const sampleCharacters: CharacterRecord[] = [
     personality: 'Direct, protective, exhausted',
     faction: 'Road Wardens',
     location: 'Campfire outside the fog road',
+    homeLocationId: 'map-camp-1',
     backstory: 'Mira has watched the road fail for weeks and needs someone reckless enough to enter the fog.',
     dialogueStyle: 'Short warnings, practical details, no ornament.',
+    notes: 'Use direct threats and concise dialogue when Mira is worried.',
+    avatarColor: '#7dcfff',
   },
 ]
+
+const splitLines = (value: string): string[] =>
+  value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+
+const countLines = (value: string): number => splitLines(value).length
+
+const WORLD_CANVAS = {
+  width: 1000,
+  height: 420,
+}
+
+function pick<T>(items: T[], index: number): T {
+  return items[index % items.length]
+}
+
+function buildQuickMap(world: WorldRecord, count = 7): {
+  locations: WorldMapLocation[]
+  routes: WorldMapRoute[]
+} {
+  const locationNames = splitLines(world.locations)
+  const factions = splitLines(world.factions)
+  const startIndex = 1
+  const locationCount = Math.max(4, Math.min(12, count))
+  const startX = WORLD_CANVAS.width * 0.12
+  const startY = WORLD_CANVAS.height * 0.2
+  const xStep = WORLD_CANVAS.width * 0.16
+  const yStep = WORLD_CANVAS.height * 0.23
+
+  const locations = Array.from({ length: locationCount }, (_, idx) => {
+    const name = locationNames[idx] || `Generated Town ${startIndex + idx}`
+    return {
+      id: `map-generated-${Date.now()}-${idx}`,
+      name,
+      type: pick(mapLocationTypeOptions, idx) as MapLocationType,
+      x: clamp(startX + (idx % 5) * xStep + (idx % 2) * 30, 20, WORLD_CANVAS.width - 20),
+      y: clamp(startY + Math.floor(idx / 5) * yStep + (idx % 3) * 14, 30, WORLD_CANVAS.height - 24),
+      region: splitLines(world.regions)[idx % Math.max(1, splitLines(world.regions).length)] || `Region ${Math.floor(idx / 5) + 1}`,
+      faction: factions.length ? pick(factions, idx) : undefined,
+      description: `Generated as part of a quick map sketch for ${world.name}.`,
+      linkedQuestIds: [],
+      linkedCharacterIds: [],
+    }
+  })
+
+  const routes = locations.slice(1).map((location, index) => {
+    const from = locations[index]
+    const lineType = pick(mapRouteTypeOptions, index)
+    const danger = pick(mapRouteDangerOptions, index)
+    const isCross =
+      index >= 2 && index % 3 === 0 ? pick(mapRouteTypeOptions, index + 1) : undefined
+
+    return {
+      id: `route-generated-${Date.now()}-${index}`,
+      fromLocationId: from.id,
+      toLocationId: location.id,
+      type: isCross || lineType,
+      danger,
+      label: 'Route',
+    }
+  })
+
+  return { locations, routes }
+}
+
+const mapLocationTypeOptions: MapLocationType[] = ['town', 'city', 'village', 'camp', 'dungeon', 'landmark', 'region']
+const mapRouteTypeOptions: MapRouteType[] = ['road', 'trail', 'river', 'sea', 'hidden']
+const mapRouteDangerOptions: WorldMapRoute['danger'][] = ['safe', 'contested', 'dangerous']
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max)
+}
+
+function normalizeQuestStatus(value: string | undefined): QuestEventType {
+  return value === 'start' || value === 'update' || value === 'complete' || value === 'fail' ? value : 'start'
+}
 
 const sampleWorld: WorldRecord = {
   name: 'The Fog Road',
@@ -288,6 +458,67 @@ const sampleWorld: WorldRecord = {
   factions: 'Road Wardens\nAshpine traders',
   mainConflict: 'The beacon network is failing, and the fog is cutting towns off from one another.',
   setting: 'A grounded frontier route where small infrastructure failures become survival problems.',
+  toneStyle: 'Grounded route-level caution and survival realism.',
+  mapRegions: [
+    { id: 'region-road', name: 'North Watch Road', color: '#6cb6ff' },
+    { id: 'region-ashpine', name: 'Ashpine Ridge', color: '#89ddff' },
+  ],
+  mapLocations: [
+    {
+      id: 'map-camp-1',
+      name: 'Mira Camp',
+      type: 'camp',
+      x: 140,
+      y: 220,
+      region: 'North Watch Road',
+      faction: 'Road Wardens',
+      description: 'Temporary stop for travelers waiting for escort.',
+      linkedQuestIds: ['quest-beacon'],
+      linkedCharacterIds: ['character-mira'],
+    },
+    {
+      id: 'map-tower-1',
+      name: 'Abandoned Watchtower',
+      type: 'landmark',
+      x: 520,
+      y: 190,
+      region: 'North Watch Road',
+      faction: 'Road Wardens',
+      description: 'Old beacon signal point now dark.',
+      linkedQuestIds: ['quest-beacon'],
+      linkedCharacterIds: [],
+    },
+    {
+      id: 'map-gate-1',
+      name: 'Old Toll Gate',
+      type: 'city',
+      x: 840,
+      y: 300,
+      region: 'Ashpine Ridge',
+      faction: 'Ashpine traders',
+      description: 'Merchant outpost controlling freight lanes.',
+      linkedQuestIds: [],
+      linkedCharacterIds: [],
+    },
+  ],
+  mapRoutes: [
+    {
+      id: 'route-camp-tower',
+      fromLocationId: 'map-camp-1',
+      toLocationId: 'map-tower-1',
+      type: 'road',
+      danger: 'contested',
+      label: 'Fog drift lane',
+    },
+    {
+      id: 'route-tower-gate',
+      fromLocationId: 'map-tower-1',
+      toLocationId: 'map-gate-1',
+      type: 'trail',
+      danger: 'safe',
+      label: 'Old roadline',
+    },
+  ],
 }
 
 const sampleNodes: QuestNode[] = [
@@ -335,6 +566,8 @@ const sampleNodes: QuestNode[] = [
       title: 'Start Quest',
       eventType: 'start',
       body: 'Quest started: Beacon in the Fog.',
+      questId: 'quest-beacon',
+      mapLocationId: 'map-camp-1',
     },
   },
   {
@@ -345,6 +578,9 @@ const sampleNodes: QuestNode[] = [
       title: 'Reach the Tower',
       objective: 'Reach the abandoned watchtower',
       body: 'Objective added to the quest log.',
+      questId: 'quest-beacon',
+      questObjectiveId: 'stage-beacon-journey',
+      mapLocationId: 'map-tower-1',
     },
   },
   {
@@ -354,6 +590,8 @@ const sampleNodes: QuestNode[] = [
     data: {
       title: 'Accepted Job?',
       body: 'Routes the quest based on accepted_beacon_job.',
+      questId: 'quest-beacon',
+      mapLocationId: 'map-camp-1',
       variableName: 'accepted_beacon_job',
       comparison: 'equals',
       compareValue: 'true',
@@ -367,6 +605,9 @@ const sampleNodes: QuestNode[] = [
       title: 'Beacon Reward',
       reward: '120 XP, Ranger Charm, safe road unlocked',
       body: 'Shown when the beacon is relit.',
+      questId: 'quest-beacon',
+      questObjectiveId: 'stage-beacon-return',
+      mapLocationId: 'map-camp-1',
     },
   },
   {
@@ -577,10 +818,156 @@ const nodeTypes = {
   end: QuestFlowNode,
 }
 
+function projectStorageKey(projectId: string): string {
+  return `${PROJECT_STORAGE_PREFIX}${projectId}`
+}
+
+function buildProjectSnapshot(project: QuestProject): ProjectSnapshot {
+  return {
+    id: project.id,
+    title: project.title || 'Untitled Quest Graph',
+    lastSavedAt: project.lastSavedAt || new Date().toISOString(),
+    nodesCount: project.nodes.length,
+    edgesCount: project.edges.length,
+  }
+}
+
+const MAX_RECENT_PROJECTS = 12
+
+function readLegacyProject(): QuestProject | null {
+  const raw = localStorage.getItem(STORAGE_KEY)
+  if (!raw) {
+    return null
+  }
+  try {
+    const legacy = migrateProject(JSON.parse(raw) as Partial<QuestProject>)
+    if (!legacy.id) {
+      return null
+    }
+    return legacy
+  } catch {
+    return null
+  }
+}
+
+function readProjectSnapshot(projectId: string): QuestProject | null {
+  const raw = localStorage.getItem(projectStorageKey(projectId))
+  if (!raw) {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<QuestProject>
+    const normalized = migrateProject(parsed)
+    return {
+      ...normalized,
+      id: projectId,
+    }
+  } catch {
+    return null
+  }
+}
+
+function readCatalogOrBootstrap(): { catalog: ProjectCatalog; initialProject: QuestProject } {
+  const rawCatalog = localStorage.getItem(PROJECT_CATALOG_KEY)
+  const legacyProject = readLegacyProject()
+
+  if (!rawCatalog) {
+    const project = legacyProject || buildSampleProject()
+    const normalized = { ...project, id: project.id || `project-${crypto.randomUUID()}` }
+    const catalog: ProjectCatalog = {
+      activeProjectId: normalized.id,
+      projects: [buildProjectSnapshot(normalized)],
+    }
+    localStorage.setItem(projectStorageKey(normalized.id), JSON.stringify(normalized))
+    localStorage.setItem(PROJECT_CATALOG_KEY, JSON.stringify(catalog))
+    return { catalog, initialProject: normalized }
+  }
+
+  try {
+    const catalog = JSON.parse(rawCatalog) as ProjectCatalog
+    const validCatalog =
+      catalog &&
+      typeof catalog === 'object' &&
+      Array.isArray(catalog.projects) &&
+      typeof catalog.activeProjectId === 'string'
+        ? catalog
+        : null
+    if (!validCatalog) {
+      const project = legacyProject || buildSampleProject()
+      const normalized = { ...project, id: project.id || `project-${crypto.randomUUID()}` }
+      const fallbackCatalog: ProjectCatalog = {
+        activeProjectId: normalized.id,
+        projects: [buildProjectSnapshot(normalized)],
+      }
+      localStorage.setItem(projectStorageKey(normalized.id), JSON.stringify(normalized))
+      localStorage.setItem(PROJECT_CATALOG_KEY, JSON.stringify(fallbackCatalog))
+      return { catalog: fallbackCatalog, initialProject: normalized }
+    }
+
+    const orderedProjects = validCatalog.projects.filter((entry) => !!entry.id)
+    const activeFromCatalog = validCatalog.activeProjectId
+    const loadedActive =
+      readProjectSnapshot(activeFromCatalog) ??
+      orderedProjects.map((entry) => readProjectSnapshot(entry.id)).find((item): item is QuestProject => Boolean(item)) ??
+      null
+
+    if (!loadedActive) {
+      const project = legacyProject || buildSampleProject()
+      const normalized = { ...project, id: project.id || `project-${crypto.randomUUID()}` }
+      const nextCatalog: ProjectCatalog = {
+        activeProjectId: normalized.id,
+        projects: [
+          buildProjectSnapshot(normalized),
+          ...orderedProjects.filter((entry) => entry.id !== normalized.id),
+        ].slice(0, MAX_RECENT_PROJECTS),
+      }
+      localStorage.setItem(projectStorageKey(normalized.id), JSON.stringify(normalized))
+      localStorage.setItem(PROJECT_CATALOG_KEY, JSON.stringify(nextCatalog))
+      return { catalog: nextCatalog, initialProject: normalized }
+    }
+
+    const currentProjects = [
+      ...orderedProjects,
+      buildProjectSnapshot(loadedActive),
+    ].filter((entry, index, array) => array.findIndex((other) => other.id === entry.id) === index)
+    const normalizedCatalog: ProjectCatalog = {
+      activeProjectId: loadedActive.id,
+      projects: currentProjects.slice(0, MAX_RECENT_PROJECTS),
+    }
+    return { catalog: normalizedCatalog, initialProject: loadedActive }
+  } catch {
+    const project = legacyProject || buildSampleProject()
+    const normalized = { ...project, id: project.id || `project-${crypto.randomUUID()}` }
+    const fallbackCatalog: ProjectCatalog = {
+      activeProjectId: normalized.id,
+      projects: [buildProjectSnapshot(normalized)],
+    }
+    localStorage.setItem(projectStorageKey(normalized.id), JSON.stringify(normalized))
+    localStorage.setItem(PROJECT_CATALOG_KEY, JSON.stringify(fallbackCatalog))
+    return { catalog: fallbackCatalog, initialProject: normalized }
+  }
+}
+
+function saveProjectCatalog(catalog: ProjectCatalog) {
+  localStorage.setItem(PROJECT_CATALOG_KEY, JSON.stringify(catalog))
+}
+
+function upsertProjectSnapshot(catalog: ProjectCatalog, project: QuestProject): ProjectCatalog {
+  const snapshot = buildProjectSnapshot(project)
+  const filteredProjects = catalog.projects.filter((entry) => entry.id !== snapshot.id)
+  return {
+    activeProjectId: snapshot.id,
+    projects: [snapshot, ...filteredProjects].slice(0, MAX_RECENT_PROJECTS),
+  }
+}
+
 function App() {
+  const bootstrap = useMemo(() => readCatalogOrBootstrap(), [])
   const fileInputRef = useRef<HTMLInputElement>(null)
   const reactFlowInstance = useRef<ReactFlowInstance<QuestNode, QuestEdge> | null>(null)
-  const [initialProject] = useState(readStoredProject)
+  const hasCenteredDialogueRef = useRef(false)
+  const [projectCatalog, setProjectCatalog] = useState<ProjectCatalog>(bootstrap.catalog)
+  const [initialProject] = useState(bootstrap.initialProject)
   const [activeSection, setActiveSection] = useState<AppSection>('dialogue')
   const [projectId, setProjectId] = useState(initialProject.id)
   const [projectTitle, setProjectTitle] = useState(initialProject.title)
@@ -616,12 +1003,34 @@ function App() {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(project))
+      const nextProject = { ...project, lastSavedAt: new Date().toISOString() }
+      localStorage.setItem(projectStorageKey(projectId), JSON.stringify(nextProject))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextProject))
+      setProjectCatalog((current) => {
+        const nextCatalog = upsertProjectSnapshot(current, nextProject)
+        saveProjectCatalog(nextCatalog)
+        if (
+          current.projects.length === nextCatalog.projects.length &&
+          current.projects.every((entry, index) => {
+            const next = nextCatalog.projects[index]
+            return (
+              entry.id === next.id &&
+              entry.title === next.title &&
+              entry.lastSavedAt === next.lastSavedAt &&
+              entry.nodesCount === next.nodesCount &&
+              entry.edgesCount === next.edgesCount
+            )
+          })
+        ) {
+          return current
+        }
+        return nextCatalog
+      })
       setStatusText('Autosaved')
     }, 700)
 
     return () => window.clearTimeout(timeout)
-  }, [project])
+  }, [project, projectId])
 
   useEffect(() => {
     localStorage.setItem(QUESTS_STORAGE_KEY, JSON.stringify(quests))
@@ -799,8 +1208,25 @@ function App() {
     }
   }
 
+  const centerDialogueView = useCallback((targetNodes: QuestNode[]) => {
+    const flow = reactFlowInstance.current
+    if (!flow || targetNodes.length === 0) {
+      return
+    }
+    const startNode = targetNodes.find((node) => node.type === 'start') ?? targetNodes[0]
+    flow.setCenter(startNode.position.x + 130, startNode.position.y + 60, {
+      zoom: 0.8,
+      duration: 0,
+    })
+    hasCenteredDialogueRef.current = true
+  }, [])
+
   const saveProject = () => {
+    localStorage.setItem(projectStorageKey(projectId), JSON.stringify(project))
     localStorage.setItem(STORAGE_KEY, JSON.stringify(project))
+    const nextCatalog = upsertProjectSnapshot(projectCatalog, { ...project, lastSavedAt: project.lastSavedAt ?? new Date().toISOString() })
+    setProjectCatalog(nextCatalog)
+    saveProjectCatalog(nextCatalog)
     setStatusText('Saved just now')
   }
 
@@ -810,15 +1236,72 @@ function App() {
     }
 
     const firstNode = createNode('start', { x: 120, y: 120 })
-    setProjectId(crypto.randomUUID())
-    setProjectTitle('Untitled Quest Graph')
+    const nextProjectId = crypto.randomUUID()
+    const nextTitle = 'Untitled Quest Graph'
+    const nextProject: QuestProject = {
+      version: 2,
+      id: nextProjectId,
+      title: nextTitle,
+      lastSavedAt: new Date().toISOString(),
+      notes: [],
+      nodes: [firstNode],
+      edges: [],
+    }
+    setProjectId(nextProjectId)
+    setProjectTitle(nextTitle)
     setNotes([])
-    setNodes([firstNode])
-    setEdges([])
+    setNodes(nextProject.nodes)
+    setEdges(nextProject.edges)
     setSelectedNodeId(firstNode.id)
     setSelectedEdgeId(null)
     setPreview(createPreview([firstNode]))
+    hasCenteredDialogueRef.current = false
+    centerDialogueView([firstNode])
+    setProjectCatalog((current) => {
+      const nextCatalog = upsertProjectSnapshot(current, nextProject)
+      localStorage.setItem(projectStorageKey(nextProjectId), JSON.stringify(nextProject))
+      saveProjectCatalog(nextCatalog)
+      return nextCatalog
+    })
     setStatusText('New graph created')
+    return
+  }
+
+  const loadProjectById = (nextProjectId: string) => {
+    if (nodes.length > 0 && statusText === 'Unsaved changes' && !window.confirm('Open another project and lose unsaved changes?')) {
+      return
+    }
+
+    const nextProject = readProjectSnapshot(nextProjectId) || {
+      ...project,
+      id: nextProjectId,
+      title: 'Untitled Quest Graph',
+      nodes: [{ id: 'start-1', type: 'start', position: { x: 120, y: 120 }, data: { title: 'Start', body: '' } }],
+      edges: [],
+      notes: [],
+      lastSavedAt: new Date().toISOString(),
+    }
+    setProjectId(nextProject.id)
+    setProjectTitle(nextProject.title)
+    setNotes(nextProject.notes)
+    setNodes(nextProject.nodes)
+    setEdges(nextProject.edges)
+    setSelectedNodeId(nextProject.nodes[0]?.id ?? null)
+    setSelectedEdgeId(null)
+    setActiveSection('dialogue')
+    setRightTab('inspector')
+    setPreview(createPreview(nextProject.nodes))
+    hasCenteredDialogueRef.current = false
+    centerDialogueView(nextProject.nodes)
+    setProjectCatalog((current) => {
+      const nextCatalog = {
+        ...current,
+        activeProjectId: nextProjectId,
+      }
+      saveProjectCatalog(nextCatalog)
+      return nextCatalog
+    })
+    setStatusText('Project loaded')
   }
 
   const loadSample = () => {
@@ -827,6 +1310,7 @@ function App() {
     }
 
     const nextProject = buildSampleProject()
+    nextProject.id = `project-${crypto.randomUUID()}`
     setProjectId(nextProject.id)
     setProjectTitle(nextProject.title)
     setNotes(nextProject.notes)
@@ -835,6 +1319,14 @@ function App() {
     setSelectedNodeId(nextProject.nodes[0]?.id ?? null)
     setSelectedEdgeId(null)
     setPreview(createPreview(nextProject.nodes))
+    hasCenteredDialogueRef.current = false
+    centerDialogueView(nextProject.nodes)
+    setProjectCatalog((current) => {
+      const nextCatalog = upsertProjectSnapshot(current, nextProject)
+      localStorage.setItem(projectStorageKey(nextProject.id), JSON.stringify(nextProject))
+      saveProjectCatalog(nextCatalog)
+      return nextCatalog
+    })
     setStatusText('Sample quest loaded')
   }
 
@@ -844,6 +1336,7 @@ function App() {
     }
 
     const nextProject = buildTemplate()
+    localStorage.setItem(projectStorageKey(nextProject.id), JSON.stringify(nextProject))
     setProjectId(nextProject.id)
     setProjectTitle(nextProject.title)
     setNotes(nextProject.notes)
@@ -852,6 +1345,13 @@ function App() {
     setSelectedNodeId(nextProject.nodes[0]?.id ?? null)
     setSelectedEdgeId(null)
     setPreview(createPreview(nextProject.nodes))
+    hasCenteredDialogueRef.current = false
+    centerDialogueView(nextProject.nodes)
+    setProjectCatalog((current) => {
+      const nextCatalog = upsertProjectSnapshot(current, nextProject)
+      saveProjectCatalog(nextCatalog)
+      return nextCatalog
+    })
     setStatusText('Template loaded')
   }
 
@@ -887,14 +1387,24 @@ function App() {
     try {
       const parsed = JSON.parse(await file.text()) as Partial<QuestProject>
       const nextProject = migrateProject(parsed)
-      setProjectId(nextProject.id)
-      setProjectTitle(nextProject.title)
-      setNotes(nextProject.notes)
-      setNodes(nextProject.nodes)
-      setEdges(nextProject.edges)
-      setSelectedNodeId(nextProject.nodes[0]?.id ?? null)
+      const stableId = nextProject.id || `project-${crypto.randomUUID()}`
+      const importedProject = { ...nextProject, id: stableId }
+      setProjectId(stableId)
+      setProjectTitle(importedProject.title)
+      setNotes(importedProject.notes)
+      setNodes(importedProject.nodes)
+      setEdges(importedProject.edges)
+      setSelectedNodeId(importedProject.nodes[0]?.id ?? null)
       setSelectedEdgeId(null)
-      setPreview(createPreview(nextProject.nodes))
+      setPreview(createPreview(importedProject.nodes))
+      hasCenteredDialogueRef.current = false
+      centerDialogueView(importedProject.nodes)
+      localStorage.setItem(projectStorageKey(stableId), JSON.stringify(importedProject))
+      setProjectCatalog((current) => {
+        const nextCatalog = upsertProjectSnapshot(current, importedProject)
+        saveProjectCatalog(nextCatalog)
+        return nextCatalog
+      })
       setStatusText(`Imported ${file.name}`)
     } catch {
       setStatusText('Import failed: expected QuestProject JSON')
@@ -903,6 +1413,32 @@ function App() {
 
   const importGeneratedQuest = (generated: GeneratedQuest) => {
     const nextProject = migrateProject(generated.project)
+    const generatedQuest = generated.quest
+    const mapLocationIds = new Set(world.mapLocations.map((location) => location.id))
+    const nextWorld = mapLocationIds.size
+      ? {
+          ...world,
+          mapLocations: world.mapLocations.map((location) => {
+            const hasQuestLink = generatedQuest.locationId === location.id
+            const hasCharacter = generated.characters.some((character) => character.homeLocationId === location.id)
+            if (!hasQuestLink && !hasCharacter) {
+              return location
+            }
+            const linkedQuestIds = hasQuestLink
+              ? [...new Set([generatedQuest.id, ...location.linkedQuestIds])]
+              : location.linkedQuestIds
+            const linkedCharacterIds = hasCharacter
+              ? [...new Set([...location.linkedCharacterIds, ...generated.characters.map((character) => character.id)])]
+              : location.linkedCharacterIds
+            return {
+              ...location,
+              linkedQuestIds,
+              linkedCharacterIds,
+            }
+          }),
+        }
+      : world
+
     setProjectId(nextProject.id)
     setProjectTitle(nextProject.title)
     setNotes(nextProject.notes)
@@ -916,9 +1452,18 @@ function App() {
         ...currentCharacters.filter((character) => !generatedNames.has(character.name.toLowerCase())),
       ]
     })
+    setWorld(nextWorld)
     setSelectedNodeId(nextProject.nodes[0]?.id ?? null)
     setSelectedEdgeId(null)
     setPreview(createPreview(nextProject.nodes))
+    hasCenteredDialogueRef.current = false
+    centerDialogueView(nextProject.nodes)
+    localStorage.setItem(projectStorageKey(nextProject.id), JSON.stringify(nextProject))
+    setProjectCatalog((current) => {
+      const nextCatalog = upsertProjectSnapshot(current, nextProject)
+      saveProjectCatalog(nextCatalog)
+      return nextCatalog
+    })
     setActiveSection('dialogue')
     setRightTab('preview')
     setStageOpen(true)
@@ -1040,6 +1585,12 @@ function App() {
     return () => window.removeEventListener('keydown', onKeyDown)
   }, [nodes, project, selectedNode])
 
+  useEffect(() => {
+    if (activeSection === 'dialogue' && !hasCenteredDialogueRef.current) {
+      centerDialogueView(nodes)
+    }
+  }, [activeSection, centerDialogueView, nodes])
+
   const currentPreviewNode = nodes.find((node) => node.id === preview.currentNodeId) ?? null
   const previewChoices = currentPreviewNode
     ? edges.filter((edge) => edge.source === currentPreviewNode.id)
@@ -1114,39 +1665,54 @@ function App() {
               <Save size={16} aria-hidden="true" />
               Save
             </button>
-            <button type="button" onClick={loadSample}>
-              <ScrollText size={16} aria-hidden="true" />
-              Sample
-            </button>
-            <button type="button" onClick={() => loadTemplate(buildBranchingDialogueTemplate)}>
-              Branch
-            </button>
-            <button type="button" onClick={() => loadTemplate(buildQuestChainTemplate)}>
-              Quest
-            </button>
-            <button type="button" onClick={() => loadTemplate(buildRewardChoiceTemplate)}>
-              Reward
-            </button>
             <button type="button" onClick={openStage}>
               <Play size={16} aria-hidden="true" />
               Stage
             </button>
-            <button type="button" onClick={() => fileInputRef.current?.click()}>
-              <Upload size={16} aria-hidden="true" />
-              Import
-            </button>
-            <button type="button" className="button-primary" onClick={exportProject}>
-              <Download size={16} aria-hidden="true" />
-              Graph JSON
-            </button>
-            <button type="button" onClick={exportScript}>
-              <Download size={16} aria-hidden="true" />
-              Script JSON
-            </button>
+            <details className="topbar__menu">
+              <summary className="topbar__menu-trigger">
+                Templates
+                <ChevronDown size={14} aria-hidden="true" />
+              </summary>
+              <div className="topbar__menu-panel">
+                <button type="button" onClick={() => loadTemplate(buildBranchingDialogueTemplate)}>
+                  Branch Template
+                </button>
+                <button type="button" onClick={() => loadTemplate(buildQuestChainTemplate)}>
+                  Quest Template
+                </button>
+                <button type="button" onClick={() => loadTemplate(buildRewardChoiceTemplate)}>
+                  Reward Template
+                </button>
+                <button type="button" onClick={loadSample}>
+                  Load Sample Project
+                </button>
+              </div>
+            </details>
+            <details className="topbar__menu">
+              <summary className="topbar__menu-trigger">
+                Project
+                <ChevronDown size={14} aria-hidden="true" />
+              </summary>
+              <div className="topbar__menu-panel">
+                <button type="button" onClick={() => fileInputRef.current?.click()}>
+                  <Upload size={16} aria-hidden="true" />
+                  Import JSON
+                </button>
+                <button type="button" className="button-primary" onClick={exportProject}>
+                  <Download size={16} aria-hidden="true" />
+                  Export Graph
+                </button>
+                <button type="button" onClick={exportScript}>
+                  <Download size={16} aria-hidden="true" />
+                  Export Script
+                </button>
+              </div>
+            </details>
+            <span className="save-status" aria-live="polite">
+              {statusText}
+            </span>
           </div>
-          <span className="save-status" aria-live="polite">
-            {statusText}
-          </span>
           <input
             ref={fileInputRef}
             type="file"
@@ -1164,6 +1730,9 @@ function App() {
 
         {activeSection === 'dashboard' && (
           <DashboardPage
+            activeProjectId={projectId}
+            projectCatalog={projectCatalog}
+            onLoadProject={loadProjectById}
             projectTitle={projectTitle}
             nodes={nodes}
             edges={edges}
@@ -1180,6 +1749,7 @@ function App() {
           <QuestDesignerPage
             quests={quests}
             graphNodes={questLinkedNodes}
+            worldLocations={world.mapLocations}
             onChange={setQuests}
             onOpenDialogue={() => setActiveSection('dialogue')}
           />
@@ -1189,6 +1759,7 @@ function App() {
           <CharacterCreatorPage
             characters={characters}
             dialogueNodes={nodes.filter((node) => node.type === 'dialogue')}
+            worldLocations={world.mapLocations}
             onChange={setCharacters}
           />
         )}
@@ -1264,14 +1835,18 @@ function App() {
               nodeTypes={nodeTypes}
               onInit={(instance) => {
                 reactFlowInstance.current = instance
-                instance.fitView({ padding: 0.18 })
+                requestAnimationFrame(() => {
+                  if (activeSection === 'dialogue') {
+                    centerDialogueView(nodes)
+                  }
+                })
               }}
               onNodesChange={onNodesChange}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
               onSelectionChange={handleSelectionChange}
-              fitView
-              minZoom={0.18}
+              fitView={false}
+              minZoom={0.45}
               maxZoom={1.6}
               deleteKeyCode={['Backspace', 'Delete']}
               snapToGrid
@@ -1312,6 +1887,8 @@ function App() {
                 selectedNode={selectedNode}
                 selectedEdge={selectedEdge}
                 characterNames={characterNames}
+                worldLocations={world.mapLocations}
+                quests={quests}
                 onDelete={deleteSelection}
                 onDuplicate={duplicateNode}
                 onSetAsStart={setAsStart}
@@ -1404,6 +1981,9 @@ function QuestFlowNode({ data, type, selected }: NodeProps<QuestNode>) {
         </span>
       )}
       {data.eventType && <span className="quest-node__tag">State: {data.eventType}</span>}
+      {data.questId && <span className="quest-node__tag">Quest ID: {data.questId}</span>}
+      {data.questObjectiveId && <span className="quest-node__tag">Objective: {data.questObjectiveId}</span>}
+      {data.mapLocationId && <span className="quest-node__tag">Map: {data.mapLocationId}</span>}
       {data.objective && <span className="quest-node__tag">Objective: {data.objective}</span>}
       {data.reward && <span className="quest-node__tag">Reward: {data.reward}</span>}
       <Handle type="source" position={Position.Right} className="node-handle" />
@@ -1412,6 +1992,8 @@ function QuestFlowNode({ data, type, selected }: NodeProps<QuestNode>) {
 }
 
 function DashboardPage({
+  activeProjectId,
+  projectCatalog,
   projectTitle,
   nodes,
   edges,
@@ -1419,9 +2001,12 @@ function DashboardPage({
   characters,
   world,
   validationIssues,
+  onLoadProject,
   onOpenDialogue,
   onOpenStage,
 }: {
+  activeProjectId: string
+  projectCatalog: ProjectCatalog
   projectTitle: string
   nodes: QuestNode[]
   edges: QuestEdge[]
@@ -1429,12 +2014,18 @@ function DashboardPage({
   characters: CharacterRecord[]
   world: WorldRecord
   validationIssues: ValidationIssue[]
+  onLoadProject: (projectId: string) => void
   onOpenDialogue: () => void
   onOpenStage: () => void
 }) {
   const dialogueCount = nodes.filter((node) => node.type === 'dialogue').length
   const choiceCount = nodes.filter((node) => node.type === 'choice').length
+  const treeCount = projectCatalog.projects.length
+  const locationCount = world.mapLocations.length
+  const factionCount = countLines(world.factions)
   const issueCount = validationIssues.length
+  const recentProjects = projectCatalog.projects.slice(0, 6)
+  const hasRecentProjects = recentProjects.length > 0
 
   return (
     <section className="toolkit-page dashboard-page" aria-label="Dashboard">
@@ -1455,46 +2046,95 @@ function DashboardPage({
       </div>
 
       <div className="stat-strip">
-        <span><strong>{nodes.length}</strong> nodes</span>
-        <span><strong>{edges.length}</strong> links</span>
-        <span><strong>{dialogueCount}</strong> dialogue lines</span>
-        <span><strong>{choiceCount}</strong> choices</span>
-        <span><strong>{issueCount}</strong> validation flags</span>
+        <span><strong>{nodes.length}</strong> Nodes</span>
+        <span><strong>{edges.length}</strong> Links</span>
+        <span><strong>{dialogueCount}</strong> Dialogue Lines</span>
+        <span><strong>{choiceCount}</strong> Choices</span>
+        <span><strong>{quests.length}</strong> Quests</span>
+        <span><strong>{treeCount}</strong> Dialogue Trees</span>
+        <span><strong>{characters.length}</strong> Characters</span>
+        <span><strong>{locationCount}</strong> Locations</span>
+        <span><strong>{factionCount}</strong> Factions</span>
+        <span><strong>{issueCount}</strong> Validation Flags</span>
       </div>
 
       <div className="toolkit-grid">
         <section className="tool-panel">
+          <div className="panel-heading"><span>Recent Projects</span></div>
+          {!hasRecentProjects ? (
+            <p className="muted">No saved projects yet. Create a project to begin.</p>
+          ) : (
+            recentProjects.map((snapshot) => (
+              <article key={snapshot.id} className="row-card">
+                <strong>{snapshot.title}</strong>
+                <span>
+                  {snapshot.nodesCount} nodes - {snapshot.edgesCount} links
+                </span>
+                <small>
+                  Updated {new Date(snapshot.lastSavedAt).toLocaleString()}
+                </small>
+                <div className="button-row">
+                  <button
+                    type="button"
+                    onClick={() => onLoadProject(snapshot.id)}
+                    disabled={snapshot.id === activeProjectId}
+                  >
+                    {snapshot.id === activeProjectId ? 'Open' : 'Load'}
+                  </button>
+                  <button type="button" onClick={() => onOpenDialogue()}>
+                    Open Graph
+                  </button>
+                </div>
+              </article>
+            ))
+          )}
+        </section>
+        <section className="tool-panel">
           <div className="panel-heading"><span>Recent Quests</span></div>
-          {quests.map((quest) => (
-            <article key={quest.id} className="row-card">
-              <strong>{quest.title}</strong>
-              <span>{quest.giver} · {quest.status}</span>
-              <p>{quest.description}</p>
-            </article>
-          ))}
+          {quests.length === 0 ? (
+            <p className="muted">No quests yet. Generate or create one from Character + Quest tools.</p>
+          ) : (
+            quests.map((quest) => (
+              <article key={quest.id} className="row-card">
+                <strong>{quest.title}</strong>
+                <span>{quest.giver} - {quest.status}</span>
+                <p>{quest.description}</p>
+              </article>
+            ))
+          )}
         </section>
         <section className="tool-panel">
           <div className="panel-heading"><span>Characters</span></div>
-          {characters.map((character) => (
-            <article key={character.id} className="row-card">
-              <strong>{character.name}</strong>
-              <span>{character.role} · {character.faction}</span>
-              <p>{character.dialogueStyle}</p>
-            </article>
-          ))}
+          {characters.length === 0 ? (
+            <p className="muted">No characters yet. Open Character Creator to add speakers.</p>
+          ) : (
+            characters.map((character) => (
+              <article key={character.id} className="row-card">
+                <span
+                  className="character-avatar"
+                  style={{ '--avatar-color': character.avatarColor, '--avatar-initials': `'${character.name[0]?.toUpperCase() ?? '?'}'` } as React.CSSProperties}
+                  aria-hidden="true"
+                />
+                <strong>{character.name}</strong>
+                <span>{character.role} - {character.faction}</span>
+                <p>{character.dialogueStyle}</p>
+              </article>
+            ))
+          )}
         </section>
       </div>
     </section>
   )
 }
-
 function QuestDesignerPage({
   quests,
+  worldLocations,
   graphNodes,
   onChange,
   onOpenDialogue,
 }: {
   quests: QuestRecord[]
+  worldLocations: WorldMapLocation[]
   graphNodes: QuestNode[]
   onChange: (quests: QuestRecord[]) => void
   onOpenDialogue: () => void
@@ -1504,6 +2144,7 @@ function QuestDesignerPage({
   }
 
   const addQuest = () => {
+    const locationId = worldLocations[0]?.id
     onChange([
       ...quests,
       {
@@ -1514,8 +2155,50 @@ function QuestDesignerPage({
         status: 'start',
         objectives: '',
         rewards: '',
+        locationId,
+        stages: [],
+        linkedNodeIds: [],
       },
     ])
+  }
+
+  const updateQuestStages = (questId: string, stages: QuestObjective[]) => {
+    onChange(quests.map((quest) => (quest.id === questId ? { ...quest, stages } : quest)))
+  }
+
+  const addQuestStage = (questId: string) => {
+    updateQuestStages(
+      questId,
+      [
+        ...(quests.find((quest) => quest.id === questId)?.stages ?? []),
+        {
+          id: `stage-${crypto.randomUUID()}`,
+          title: 'New Stage',
+          description: '',
+          completed: false,
+        },
+      ],
+    )
+  }
+
+  const updateQuestStage = (questId: string, stageId: string, updates: Partial<QuestObjective>) => {
+    const quest = quests.find((quest) => quest.id === questId)
+    if (!quest) {
+      return
+    }
+    const stages = quest.stages ?? []
+    updateQuestStages(
+      questId,
+      stages.map((stage) => (stage.id === stageId ? { ...stage, ...updates } : stage)),
+    )
+  }
+
+  const removeQuestStage = (questId: string, stageId: string) => {
+    const quest = quests.find((quest) => quest.id === questId)
+    if (!quest?.stages) {
+      return
+    }
+    updateQuestStages(questId, quest.stages.filter((stage) => stage.id !== stageId))
   }
 
   const deleteQuest = (id: string) => {
@@ -1541,7 +2224,7 @@ function QuestDesignerPage({
           {quests.map((quest) => (
             <article key={quest.id} className="record-editor">
               <label>Title<input value={quest.title} onChange={(event) => updateQuest(quest.id, { title: event.target.value })} /></label>
-              <label>Description<textarea rows={3} value={quest.description} onChange={(event) => updateQuest(quest.id, { description: event.target.value })} /></label>
+                <label>Description<textarea rows={3} value={quest.description} onChange={(event) => updateQuest(quest.id, { description: event.target.value })} /></label>
               <div className="form-grid">
                 <label>Quest Giver<input value={quest.giver} onChange={(event) => updateQuest(quest.id, { giver: event.target.value })} /></label>
                 <label>Status
@@ -1552,8 +2235,48 @@ function QuestDesignerPage({
                     <option value="fail">fail</option>
                   </select>
                 </label>
+                <label>Location
+                  <select value={quest.locationId || ''} onChange={(event) => updateQuest(quest.id, { locationId: event.target.value || undefined })}>
+                    <option value="">Unlinked</option>
+                    {worldLocations.map((location) => (
+                      <option key={location.id} value={location.id}>
+                        {location.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
               <label>Objectives<textarea rows={4} value={quest.objectives} onChange={(event) => updateQuest(quest.id, { objectives: event.target.value })} /></label>
+              <div className="record-editor">
+                <div className="panel-heading">
+                  <span>Quest Stages</span>
+                  <button type="button" onClick={() => addQuestStage(quest.id)}>Add Stage</button>
+                </div>
+                {(quest.stages ?? []).map((stage) => (
+                  <article key={stage.id} className="row-card">
+                    <label>Title
+                      <input value={stage.title} onChange={(event) => updateQuestStage(quest.id, stage.id, { title: event.target.value })} />
+                    </label>
+                    <label>Description
+                      <textarea
+                        rows={2}
+                        value={stage.description}
+                        onChange={(event) => updateQuestStage(quest.id, stage.id, { description: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={stage.completed}
+                        onChange={(event) => updateQuestStage(quest.id, stage.id, { completed: event.target.checked })}
+                      />
+                      Completed
+                    </label>
+                    <button type="button" onClick={() => removeQuestStage(quest.id, stage.id)}>Remove Stage</button>
+                  </article>
+                ))}
+                {(quest.stages ?? []).length === 0 ? <span className="issue-empty">No stages added yet.</span> : null}
+              </div>
               <label>Rewards<textarea rows={3} value={quest.rewards} onChange={(event) => updateQuest(quest.id, { rewards: event.target.value })} /></label>
               <button type="button" onClick={() => deleteQuest(quest.id)}>Delete Quest</button>
             </article>
@@ -1579,10 +2302,12 @@ function QuestDesignerPage({
 function CharacterCreatorPage({
   characters,
   dialogueNodes,
+  worldLocations,
   onChange,
 }: {
   characters: CharacterRecord[]
   dialogueNodes: QuestNode[]
+  worldLocations: WorldMapLocation[]
   onChange: (characters: CharacterRecord[]) => void
 }) {
   const updateCharacter = (id: string, data: Partial<CharacterRecord>) => {
@@ -1590,6 +2315,7 @@ function CharacterCreatorPage({
   }
 
   const addCharacter = () => {
+    const location = worldLocations[0]
     onChange([
       ...characters,
       {
@@ -1598,7 +2324,10 @@ function CharacterCreatorPage({
         role: '',
         personality: '',
         faction: '',
-        location: '',
+        location: location?.name || '',
+        homeLocationId: location?.id,
+        notes: '',
+        avatarColor: '#7dcfff',
         backstory: '',
         dialogueStyle: '',
       },
@@ -1623,14 +2352,56 @@ function CharacterCreatorPage({
           <div className="panel-heading"><span>Character Database</span></div>
           {characters.map((character) => (
             <article key={character.id} className="record-editor">
+              <div className="character-header">
+                <span
+                  className="character-avatar"
+                  style={{
+                    '--avatar-color': character.avatarColor,
+                    '--avatar-initials': `'${character.name[0]?.toUpperCase() ?? '?'}'`,
+                  } as React.CSSProperties}
+                  aria-hidden="true"
+                />
+                <span className="character-title">
+                  <strong>{character.name || 'Unnamed character'}</strong>
+                  <small>{character.location || 'Unlinked location'}</small>
+                </span>
+              </div>
               <div className="form-grid">
                 <label>Name<input value={character.name} onChange={(event) => updateCharacter(character.id, { name: event.target.value })} /></label>
                 <label>Role<input value={character.role} onChange={(event) => updateCharacter(character.id, { role: event.target.value })} /></label>
                 <label>Faction<input value={character.faction} onChange={(event) => updateCharacter(character.id, { faction: event.target.value })} /></label>
                 <label>Location<input value={character.location} onChange={(event) => updateCharacter(character.id, { location: event.target.value })} /></label>
+                <label>Home location
+                  <select
+                    value={character.homeLocationId ?? ''}
+                    onChange={(event) => {
+                      const nextLocation = worldLocations.find((location) => location.id === event.target.value)
+                      updateCharacter(character.id, {
+                        homeLocationId: event.target.value || undefined,
+                        location: nextLocation?.name || character.location,
+                      })
+                    }}
+                  >
+                    <option value="">Unlinked</option>
+                    {worldLocations.map((location) => (
+                      <option key={location.id} value={location.id}>
+                        {location.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               </div>
+              <label>Avatar color
+                <input
+                  type="text"
+                  value={character.avatarColor}
+                  onChange={(event) => updateCharacter(character.id, { avatarColor: event.target.value })}
+                  placeholder="#7dcfff"
+                />
+              </label>
               <label>Personality<textarea rows={2} value={character.personality} onChange={(event) => updateCharacter(character.id, { personality: event.target.value })} /></label>
               <label>Backstory<textarea rows={3} value={character.backstory} onChange={(event) => updateCharacter(character.id, { backstory: event.target.value })} /></label>
+              <label>Notes<textarea rows={2} value={character.notes} onChange={(event) => updateCharacter(character.id, { notes: event.target.value })} /></label>
               <label>Dialogue Style<textarea rows={2} value={character.dialogueStyle} onChange={(event) => updateCharacter(character.id, { dialogueStyle: event.target.value })} /></label>
             </article>
           ))}
@@ -1662,8 +2433,148 @@ function WorldBuilderPage({
   characters: CharacterRecord[]
   onChange: (world: WorldRecord) => void
 }) {
-  const updateWorld = (data: Partial<WorldRecord>) => {
-    onChange({ ...world, ...data })
+  const [selectedLocationId, setSelectedLocationId] = useState(world.mapLocations[0]?.id ?? '')
+  const [quickTownCount, setQuickTownCount] = useState(7)
+  const [dragState, setDragState] = useState<{
+    locationId: string
+    pointerX: number
+    pointerY: number
+    startX: number
+    startY: number
+  } | null>(null)
+  const [newRoute, setNewRoute] = useState({
+    fromLocationId: '',
+    toLocationId: '',
+    type: 'road' as MapRouteType,
+    danger: 'safe' as WorldMapRoute['danger'],
+    label: '',
+  })
+
+  const selectedLocation = world.mapLocations.find((location) => location.id === selectedLocationId)
+  const linkedQuests = quests.filter((quest) => quest.locationId === selectedLocationId)
+  const linkedCharacters = characters.filter((character) => character.homeLocationId === selectedLocationId)
+  const locationById = Object.fromEntries(world.mapLocations.map((location) => [location.id, location.name]))
+
+  const updateWorld = (data: Partial<WorldRecord>) => onChange({ ...world, ...data })
+  const mapPointFromClient = (element: SVGSVGElement, clientX: number, clientY: number) => {
+    const rect = element.getBoundingClientRect()
+    return {
+      x: clamp(((clientX - rect.left) / rect.width) * WORLD_CANVAS.width, 20, WORLD_CANVAS.width - 20),
+      y: clamp(((clientY - rect.top) / rect.height) * WORLD_CANVAS.height, 20, WORLD_CANVAS.height - 20),
+    }
+  }
+
+  const updateLocation = (locationId: string, data: Partial<WorldMapLocation>) => {
+    updateWorld({
+      mapLocations: world.mapLocations.map((location) =>
+        location.id === locationId ? { ...location, ...data } : location,
+      ),
+    })
+  }
+
+  const addLocation = () => {
+    const nextIndex = world.mapLocations.length + 1
+    const nextLocation: WorldMapLocation = {
+      id: `map-location-${crypto.randomUUID()}`,
+      name: `Location ${nextIndex}`,
+      type: 'town',
+      x: 100 + (nextIndex * 97) % (WORLD_CANVAS.width - 180),
+      y: 90 + (nextIndex * 47) % (WORLD_CANVAS.height - 160),
+      description: '',
+      linkedQuestIds: [],
+      linkedCharacterIds: [],
+    }
+    setSelectedLocationId(nextLocation.id)
+    updateWorld({ mapLocations: [...world.mapLocations, nextLocation] })
+  }
+
+  const removeLocation = (locationId: string) => {
+    updateWorld({
+      mapLocations: world.mapLocations.filter((location) => location.id !== locationId),
+      mapRoutes: world.mapRoutes.filter(
+        (route) => route.fromLocationId !== locationId && route.toLocationId !== locationId,
+      ),
+    })
+    if (selectedLocationId === locationId) {
+      setSelectedLocationId(world.mapLocations.find((location) => location.id !== locationId)?.id ?? '')
+    }
+  }
+
+  const generateQuickMapLocations = () => {
+    const count = Math.max(4, Math.min(12, Number(quickTownCount) || 7))
+    const generated = buildQuickMap(world, count)
+    const generatedNames = generated.locations.map((location) => location.name)
+    updateWorld({
+      mapLocations: [...world.mapLocations, ...generated.locations],
+      mapRoutes: [...world.mapRoutes, ...generated.routes],
+      locations: [...new Set([...splitLines(world.locations), ...generatedNames])].join('\n'),
+    })
+    if (!selectedLocationId && generated.locations[0]) {
+      setSelectedLocationId(generated.locations[0].id)
+    }
+  }
+
+  const addRoute = () => {
+    if (!newRoute.fromLocationId || !newRoute.toLocationId || newRoute.fromLocationId === newRoute.toLocationId) {
+      return
+    }
+    updateWorld({
+      mapRoutes: [
+        ...world.mapRoutes,
+        {
+          id: `route-${crypto.randomUUID()}`,
+          fromLocationId: newRoute.fromLocationId,
+          toLocationId: newRoute.toLocationId,
+          type: newRoute.type,
+          danger: newRoute.danger,
+          label: newRoute.label.trim(),
+        },
+      ],
+    })
+    setNewRoute((current) => ({ ...current, toLocationId: '', label: '' }))
+  }
+
+  const deleteRoute = (routeId: string) => {
+    updateWorld({
+      mapRoutes: world.mapRoutes.filter((route) => route.id !== routeId),
+    })
+  }
+
+  const handlePointerDown = (event: React.PointerEvent<SVGElement>, locationId: string) => {
+    const svg = (event.currentTarget as SVGGraphicsElement).ownerSVGElement
+    if (!svg) {
+      return
+    }
+    const location = world.mapLocations.find((entry) => entry.id === locationId)
+    if (!location) {
+      return
+    }
+
+    const point = mapPointFromClient(svg, event.clientX, event.clientY)
+    setSelectedLocationId(locationId)
+    setDragState({
+      locationId,
+      pointerX: point.x,
+      pointerY: point.y,
+      startX: location.x,
+      startY: location.y,
+    })
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const handlePointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (!dragState) {
+      return
+    }
+    const point = mapPointFromClient(event.currentTarget, event.clientX, event.clientY)
+    updateLocation(dragState.locationId, {
+      x: Math.round(clamp(dragState.startX + (point.x - dragState.pointerX), 20, WORLD_CANVAS.width - 20)),
+      y: Math.round(clamp(dragState.startY + (point.y - dragState.pointerY), 20, WORLD_CANVAS.height - 20)),
+    })
+  }
+
+  const handlePointerUp = () => {
+    setDragState(null)
   }
 
   return (
@@ -1685,15 +2596,216 @@ function WorldBuilderPage({
             <label>Locations<textarea rows={5} value={world.locations} onChange={(event) => updateWorld({ locations: event.target.value })} /></label>
             <label>Factions<textarea rows={5} value={world.factions} onChange={(event) => updateWorld({ factions: event.target.value })} /></label>
           </div>
+          <div className="record-editor">
+            <div className="panel-heading">
+              <span>Map Location Links</span>
+              <button type="button" onClick={addLocation}>Add location</button>
+            </div>
+            <div className="button-row">
+              <label>
+                Quick towns
+                <input
+                  type="number"
+                  min={4}
+                  max={12}
+                  value={quickTownCount}
+                  onChange={(event) => setQuickTownCount(Number(event.target.value || 7))}
+                />
+              </label>
+              <button type="button" onClick={generateQuickMapLocations}>
+                Generate map
+              </button>
+            </div>
+            <label>Select Map Location
+              <select value={selectedLocationId} onChange={(event) => setSelectedLocationId(event.target.value)}>
+                {world.mapLocations.map((location) => (
+                  <option key={location.id} value={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>Location Name
+              <input
+                value={selectedLocation?.name ?? ''}
+                onChange={(event) => selectedLocation && updateLocation(selectedLocation.id, { name: event.target.value })}
+                disabled={!selectedLocation}
+              />
+            </label>
+            <div className="form-grid">
+              <label>Type
+                <select
+                  value={selectedLocation?.type ?? 'town'}
+                  onChange={(event) =>
+                    selectedLocation && updateLocation(selectedLocation.id, { type: event.target.value as MapLocationType })
+                  }
+                  disabled={!selectedLocation}
+                >
+                  {mapLocationTypeOptions.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>Faction<input
+                value={selectedLocation?.faction ?? ''}
+                onChange={(event) =>
+                  selectedLocation && updateLocation(selectedLocation.id, { faction: event.target.value })
+                }
+                disabled={!selectedLocation}
+              /></label>
+            </div>
+            <label>Description<textarea
+              rows={2}
+              value={selectedLocation?.description ?? ''}
+              onChange={(event) =>
+                selectedLocation && updateLocation(selectedLocation.id, { description: event.target.value })
+              }
+              disabled={!selectedLocation}
+            /></label>
+            <button
+              type="button"
+              onClick={() => selectedLocation && removeLocation(selectedLocation.id)}
+              disabled={!selectedLocation}
+            >
+              Remove Selected
+            </button>
+          </div>
         </section>
 
         <section className="tool-panel">
-          <div className="panel-heading"><span>Linked Design Data</span></div>
+          <div className="panel-heading">
+            <span>World Map</span>
+          </div>
+          <svg
+            className="world-map-canvas"
+            viewBox={`0 0 ${WORLD_CANVAS.width} ${WORLD_CANVAS.height}`}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerLeave={handlePointerUp}
+          >
+            <rect width={WORLD_CANVAS.width} height={WORLD_CANVAS.height} fill="#101217" stroke="#343a46" />
+            {world.mapRoutes.map((route) => {
+              const from = world.mapLocations.find((location) => location.id === route.fromLocationId)
+              const to = world.mapLocations.find((location) => location.id === route.toLocationId)
+              if (!from || !to) {
+                return null
+              }
+              const lineColor =
+                route.danger === 'safe' ? '#7dcfff' : route.danger === 'contested' ? '#f7c56c' : '#f06a6a'
+              return (
+                <g key={route.id}>
+                  <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={lineColor} strokeWidth={3} strokeLinecap="round" />
+                  <text x={(from.x + to.x) / 2} y={(from.y + to.y) / 2} fill="#9aa3b2" fontSize={11} textAnchor="middle">
+                    {route.label || route.type}
+                  </text>
+                </g>
+              )
+            })}
+            {world.mapLocations.map((location) => (
+              <g
+                key={location.id}
+                onClick={() => setSelectedLocationId(location.id)}
+                onPointerDown={(event) => handlePointerDown(event, location.id)}
+              >
+                <circle
+                  cx={location.x}
+                  cy={location.y}
+                  r={10}
+                  fill={selectedLocationId === location.id ? '#ffcb6b' : '#6cb6ff'}
+                  stroke="#181b22"
+                  strokeWidth={2}
+                />
+                <text x={location.x + 10} y={location.y - 10} fill="#e7eaf0" fontSize={11}>
+                  {location.name}
+                </text>
+              </g>
+            ))}
+          </svg>
+          <div className="form-grid">
+            <label>Linked Quests
+              <span>{linkedQuests.length}</span>
+            </label>
+            <label>Linked Characters
+              <span>{linkedCharacters.length}</span>
+            </label>
+          </div>
+          <div className="button-row">
+            <label>From
+              <select
+                value={newRoute.fromLocationId}
+                onChange={(event) => setNewRoute((current) => ({ ...current, fromLocationId: event.target.value }))}
+              >
+                <option value="">Select</option>
+                {world.mapLocations.map((location) => (
+                  <option key={location.id} value={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>To
+              <select
+                value={newRoute.toLocationId}
+                onChange={(event) => setNewRoute((current) => ({ ...current, toLocationId: event.target.value }))}
+              >
+                <option value="">Select</option>
+                {world.mapLocations.map((location) => (
+                  <option key={location.id} value={location.id}>
+                    {location.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>Path type
+              <select value={newRoute.type} onChange={(event) => setNewRoute((current) => ({ ...current, type: event.target.value as MapRouteType }))}>
+                {mapRouteTypeOptions.map((type) => (
+                  <option key={type} value={type}>
+                    {type}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>Danger
+              <select
+                value={newRoute.danger}
+                onChange={(event) =>
+                  setNewRoute((current) => ({ ...current, danger: event.target.value as WorldMapRoute['danger'] }))
+                }
+              >
+                {mapRouteDangerOptions.map((danger) => (
+                  <option key={danger} value={danger}>
+                    {danger}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>Label
+              <input value={newRoute.label} onChange={(event) => setNewRoute((current) => ({ ...current, label: event.target.value }))} />
+            </label>
+          </div>
+          <div className="button-row">
+            <button type="button" onClick={addRoute}>Add route</button>
+          </div>
+          <div className="panel-heading"><span>Routes</span></div>
           <div className="link-list">
-            <strong>{quests.length} quests</strong>
-            <span>{quests.map((quest) => quest.title).join(', ')}</span>
-            <strong>{characters.length} characters</strong>
-            <span>{characters.map((character) => character.name).join(', ')}</span>
+            {world.mapRoutes.length ? (
+              world.mapRoutes.map((route) => (
+                <div key={route.id} className="row-card">
+                  <strong>
+                    {locationById[route.fromLocationId] || route.fromLocationId}
+                    {' -> '}
+                    {locationById[route.toLocationId] || route.toLocationId}
+                  </strong>
+                  <span>{route.type} - {route.danger}</span>
+                  {route.label && <span>{route.label}</span>}
+                  <button type="button" onClick={() => deleteRoute(route.id)}>Delete route</button>
+                </div>
+              ))
+            ) : (
+              <span className="issue-empty">No routes yet</span>
+            )}
           </div>
         </section>
       </div>
@@ -1803,7 +2915,7 @@ function AiQuestGeneratorPage({
             <div className="generated-review">
               <article className="row-card">
                 <strong>{generated.quest.title}</strong>
-                <span>{generated.quest.giver} · {generated.quest.status}</span>
+                <span>{generated.quest.giver} - {generated.quest.status}</span>
                 <p>{generated.quest.description}</p>
               </article>
               <div className="review-list">
@@ -1832,6 +2944,8 @@ function InspectorPanel({
   selectedNode,
   selectedEdge,
   characterNames,
+  worldLocations,
+  quests,
   onDelete,
   onDuplicate,
   onSetAsStart,
@@ -1843,6 +2957,8 @@ function InspectorPanel({
   selectedNode: QuestNode | null
   selectedEdge: QuestEdge | null
   characterNames: string[]
+  worldLocations: WorldMapLocation[]
+  quests: QuestRecord[]
   onDelete: () => void
   onDuplicate: () => void
   onSetAsStart: () => void
@@ -1867,8 +2983,14 @@ function InspectorPanel({
       </div>
 
       {selectedNode ? (
-        <>
-          <NodeInspector node={selectedNode} characterNames={characterNames} onChange={onNodeChange} />
+          <>
+          <NodeInspector
+            node={selectedNode}
+            characterNames={characterNames}
+            worldLocations={worldLocations}
+            quests={quests}
+            onChange={onNodeChange}
+          />
           <div className="button-row">
             <button type="button" onClick={onDuplicate}>
               Duplicate
@@ -1901,15 +3023,21 @@ function InspectorPanel({
 function NodeInspector({
   node,
   characterNames,
+  worldLocations,
+  quests,
   onChange,
 }: {
   node: QuestNode
   characterNames: string[]
+  worldLocations: WorldMapLocation[]
+  quests: QuestRecord[]
   onChange: (data: Partial<QuestNodeData>) => void
 }) {
   const kind = node.type as QuestNodeKind
   const meta = nodeMeta[kind]
   const Icon = meta.icon
+  const linkedQuest = node.data.questId ? quests.find((quest) => quest.id === node.data.questId) : null
+  const linkedObjectives = linkedQuest?.stages ?? []
 
   return (
     <div className="inspector-form">
@@ -1935,6 +3063,38 @@ function NodeInspector({
         />
       </label>
 
+      <div className="form-grid">
+        <label>
+          Quest
+          <select
+            value={node.data.questId || ''}
+            onChange={(event) => onChange({ questId: event.target.value || undefined })}
+          >
+            <option value="">Unlinked</option>
+            {quests.map((quest) => (
+              <option key={quest.id} value={quest.id}>
+                {quest.title}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label>
+          Map Location
+          <select
+            value={node.data.mapLocationId || ''}
+            onChange={(event) => onChange({ mapLocationId: event.target.value || undefined })}
+          >
+            <option value="">None</option>
+            {worldLocations.map((location) => (
+              <option key={location.id} value={location.id}>
+                {location.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
       {kind === 'dialogue' && (
         <label>
           Speaker
@@ -1948,6 +3108,24 @@ function NodeInspector({
               <option key={name} value={name} />
             ))}
           </datalist>
+        </label>
+      )}
+
+      {(kind === 'objective' || kind === 'reward' || kind === 'quest_event') && (
+        <label>
+          Quest Objective
+          <select
+            value={node.data.questObjectiveId || ''}
+            onChange={(event) => onChange({ questObjectiveId: event.target.value || undefined })}
+            disabled={linkedObjectives.length === 0}
+          >
+            <option value="">None</option>
+            {linkedObjectives.map((objective) => (
+              <option key={objective.id} value={objective.id}>
+                {objective.title}
+              </option>
+            ))}
+          </select>
         </label>
       )}
 
@@ -2798,19 +3976,6 @@ function sanitizeEdge(edge: QuestEdge): QuestEdge {
   }
 }
 
-function readStoredProject(): QuestProject {
-  const raw = localStorage.getItem(STORAGE_KEY)
-  if (!raw) {
-    return buildSampleProject()
-  }
-
-  try {
-    return migrateProject(JSON.parse(raw) as Partial<QuestProject>)
-  } catch {
-    return buildSampleProject()
-  }
-}
-
 function readStoredQuests(): QuestRecord[] {
   const raw = localStorage.getItem(QUESTS_STORAGE_KEY)
   if (!raw) {
@@ -2819,7 +3984,27 @@ function readStoredQuests(): QuestRecord[] {
 
   try {
     const parsed = JSON.parse(raw) as QuestRecord[]
-    return Array.isArray(parsed) ? parsed : sampleQuests
+    return Array.isArray(parsed)
+      ? parsed.map((quest) => ({
+          id: quest.id || `quest-${crypto.randomUUID()}`,
+          title: quest.title || 'Untitled Quest',
+          description: quest.description || '',
+          giver: quest.giver || '',
+          status: normalizeQuestStatus(quest.status),
+          objectives: quest.objectives || '',
+          rewards: quest.rewards || '',
+          locationId: quest.locationId,
+          stages: Array.isArray(quest.stages)
+            ? quest.stages.map((stage) => ({
+                id: stage.id || `stage-${crypto.randomUUID()}`,
+                title: stage.title || '',
+                description: stage.description || '',
+                completed: Boolean(stage.completed),
+              }))
+            : [],
+          linkedNodeIds: Array.isArray(quest.linkedNodeIds) ? quest.linkedNodeIds : [],
+        }))
+      : sampleQuests
   } catch {
     return sampleQuests
   }
@@ -2833,7 +4018,21 @@ function readStoredCharacters(): CharacterRecord[] {
 
   try {
     const parsed = JSON.parse(raw) as CharacterRecord[]
-    return Array.isArray(parsed) ? parsed : sampleCharacters
+    return Array.isArray(parsed)
+      ? parsed.map((character) => ({
+          id: character.id || `character-${crypto.randomUUID()}`,
+          name: character.name || 'Unnamed character',
+          role: character.role || '',
+          personality: character.personality || '',
+          faction: character.faction || '',
+          location: character.location || '',
+          homeLocationId: character.homeLocationId,
+          backstory: character.backstory || '',
+          dialogueStyle: character.dialogueStyle || '',
+          notes: character.notes || '',
+          avatarColor: character.avatarColor || '#6cb6ff',
+        }))
+      : sampleCharacters
   } catch {
     return sampleCharacters
   }
@@ -2846,7 +4045,42 @@ function readStoredWorld(): WorldRecord {
   }
 
   try {
-    return { ...sampleWorld, ...(JSON.parse(raw) as Partial<WorldRecord>) }
+    const parsed = JSON.parse(raw) as Partial<WorldRecord>
+    return {
+      ...sampleWorld,
+      ...parsed,
+      mapRegions: Array.isArray(parsed.mapRegions)
+        ? parsed.mapRegions.map((region, index) => ({
+            id: region.id || `region-${crypto.randomUUID()}`,
+            name: region.name || `Region ${index + 1}`,
+            color: region.color,
+          }))
+        : sampleWorld.mapRegions,
+      mapLocations: Array.isArray(parsed.mapLocations)
+        ? parsed.mapLocations.map((location, index) => ({
+            id: location.id || `map-location-${crypto.randomUUID()}`,
+            name: location.name || `Location ${index + 1}`,
+            type: mapLocationTypeOptions.includes(location.type) ? location.type : 'town',
+            x: Number.isFinite(location.x) ? location.x : 160 + (index * 120) % (WORLD_CANVAS.width - 140),
+            y: Number.isFinite(location.y) ? location.y : 100 + (index * 90) % (WORLD_CANVAS.height - 120),
+            region: location.region,
+            faction: location.faction,
+            description: location.description || '',
+            linkedQuestIds: Array.isArray(location.linkedQuestIds) ? location.linkedQuestIds : [],
+            linkedCharacterIds: Array.isArray(location.linkedCharacterIds) ? location.linkedCharacterIds : [],
+          }))
+        : sampleWorld.mapLocations,
+      mapRoutes: Array.isArray(parsed.mapRoutes)
+        ? parsed.mapRoutes.map((route) => ({
+            id: route.id || `route-${crypto.randomUUID()}`,
+            fromLocationId: route.fromLocationId,
+            toLocationId: route.toLocationId,
+            type: mapRouteTypeOptions.includes(route.type) ? route.type : 'road',
+            danger: route.danger === 'safe' || route.danger === 'contested' || route.danger === 'dangerous' ? route.danger : 'safe',
+            label: route.label || '',
+          }))
+        : sampleWorld.mapRoutes,
+    }
   } catch {
     return sampleWorld
   }
@@ -2904,13 +4138,47 @@ function validateGeneratedQuest(value: unknown): GeneratedQuest {
     throw new Error(`Generated graph is not playable: ${graphIssues[0].message}`)
   }
 
-  return { quest, characters, project }
+  return {
+    quest: {
+      ...quest,
+      id: quest.id || `quest-${crypto.randomUUID()}`,
+      status: normalizeQuestStatus(quest.status),
+      linkedNodeIds: Array.isArray(quest.linkedNodeIds) ? quest.linkedNodeIds : [],
+      stages: Array.isArray(quest.stages)
+        ? quest.stages.map((stage) => ({
+            id: stage.id || `stage-${crypto.randomUUID()}`,
+            title: stage.title || 'Stage',
+            description: stage.description || '',
+            completed: Boolean(stage.completed),
+          }))
+        : [],
+      locationId: quest.locationId,
+      objectives: quest.objectives || '',
+      rewards: quest.rewards || '',
+    },
+    characters: characters.map((character) => ({
+      ...character,
+      id: character.id || `character-${crypto.randomUUID()}`,
+      role: character.role || 'Unknown',
+      personality: character.personality || '',
+      faction: character.faction || '',
+      location: character.location || '',
+      homeLocationId: character.homeLocationId,
+      backstory: character.backstory || '',
+      dialogueStyle: character.dialogueStyle || '',
+      notes: character.notes || '',
+      avatarColor: character.avatarColor || '#6cb6ff',
+    })),
+    project,
+  }
 }
 
 function buildLocalGeneratedQuest(form: GeneratorForm, world: WorldRecord): GeneratedQuest {
   const id = crypto.randomUUID()
   const title = titleFromIdea(form.idea)
   const giverName = form.idea.toLowerCase().includes('mechanic') ? 'Rook Vale' : 'Ari Vale'
+  const locationId = world.mapLocations[0]?.id
+  const objectiveId = `objective-${id}`
   const quest: QuestRecord = {
     id: `quest-${id}`,
     title,
@@ -2919,6 +4187,15 @@ function buildLocalGeneratedQuest(form: GeneratorForm, world: WorldRecord): Gene
     status: 'start',
     objectives: 'Meet the quest giver\nInvestigate the missing item\nChoose how to resolve the lead\nReturn for closure',
     rewards: 'XP\nFaction reputation\nRare crafting component',
+    locationId,
+    stages: [
+      {
+        id: objectiveId,
+        title: 'Find the missing item',
+        description: 'Track the missing component and return proof.',
+        completed: false,
+      },
+    ],
   }
   const character: CharacterRecord = {
     id: `character-${id}`,
@@ -2929,6 +4206,8 @@ function buildLocalGeneratedQuest(form: GeneratorForm, world: WorldRecord): Gene
     location: world.locations.split('\n')[0] || 'Quest hub',
     backstory: `${giverName} is tied to the problem in the quest idea and needs the player to solve it before the situation escalates.`,
     dialogueStyle: 'Concise, specific, and slightly guarded.',
+    notes: `Created for: ${title}`,
+    avatarColor: '#7dcfff',
   }
   const nodePrefix = `generated-${id}`
   const project: QuestProject = {
@@ -2957,12 +4236,16 @@ function buildLocalGeneratedQuest(form: GeneratorForm, world: WorldRecord): Gene
       ),
       createTemplateNode(`${nodePrefix}-choice`, 'choice', 660, 100, 'Take the job?', 'The player chooses how to respond.'),
       createTemplateNode(`${nodePrefix}-quest`, 'quest_event', 990, 0, 'Quest Started', `${title} added to the quest log.`, {
+        questId: `quest-${id}`,
         eventType: 'start',
       }),
       createTemplateNode(`${nodePrefix}-objective`, 'objective', 1320, 0, 'Track the Lead', 'The main objective is added.', {
+        questId: `quest-${id}`,
+        questObjectiveId: objectiveId,
         objective: 'Find the missing item and discover who moved it.',
       }),
       createTemplateNode(`${nodePrefix}-reward`, 'reward', 1650, 0, 'Resolution Reward', 'The player receives the reward.', {
+        questId: `quest-${id}`,
         reward: quest.rewards.replace(/\n/g, ', '),
       }),
       createTemplateNode(`${nodePrefix}-end-success`, 'end', 1980, 0, 'Quest Complete', 'The quest ends successfully.', {
@@ -3021,6 +4304,9 @@ function migrateProject(project: Partial<QuestProject>): QuestProject {
         character: node.data?.character,
         eventType: node.data?.eventType,
         reward: node.data?.reward,
+        questId: node.data?.questId,
+        questObjectiveId: node.data?.questObjectiveId,
+        mapLocationId: node.data?.mapLocationId,
         variableName: node.data?.variableName,
         variableValue: node.data?.variableValue,
         comparison: node.data?.comparison,
@@ -3169,3 +4455,7 @@ function getReachableNodes(startId: string, edges: QuestEdge[]): Set<string> {
 }
 
 export default App
+
+
+
+

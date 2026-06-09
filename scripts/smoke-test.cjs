@@ -18,10 +18,10 @@ async function main() {
 
   const expectedBySection = {
     Dashboard: /recent quests/i,
-    Quests: /quest records/i,
-    Characters: /character database/i,
-    World: /linked design data/i,
-    'AI Generator': /review package/i,
+    Quests: /quest designer/i,
+    Characters: /character creator/i,
+    World: /world builder/i,
+    'AI Generator': /generate playable quest/i,
     Dialogue: /node palette/i,
   }
 
@@ -75,7 +75,12 @@ async function main() {
     nodes: JSON.parse(localStorage.getItem('quest-designer-project' ) || '{}')?.nodes?.length || 0,
   }))
 
-  if (stored.quests < 2 || stored.characters < 3 || stored.worldName !== 'Smoke World' || stored.nodes < 8) {
+  if (
+    stored.quests < 2 ||
+    stored.characters < 3 ||
+    stored.worldName !== 'Smoke World' ||
+    stored.nodes < 8
+  ) {
     throw new Error('Generated import did not persist expected project data.')
   }
 
