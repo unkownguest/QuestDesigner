@@ -381,6 +381,15 @@ const splitLines = (value: string): string[] =>
 
 const countLines = (value: string): number => splitLines(value).length
 
+const buildRandomId = () =>
+  typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+
+const prefixedId = (prefix: string) => `${prefix}-${buildRandomId()}`
+
+type StateSet<T> = (value: T | ((current: T) => T)) => void
+
 const WORLD_CANVAS = {
   width: 1000,
   height: 420,
@@ -873,7 +882,7 @@ function readCatalogOrBootstrap(): { catalog: ProjectCatalog; initialProject: Qu
 
   if (!rawCatalog) {
     const project = legacyProject || buildSampleProject()
-    const normalized = { ...project, id: project.id || `project-${crypto.randomUUID()}` }
+    const normalized = { ...project, id: project.id || `project-${buildRandomId()}` }
     const catalog: ProjectCatalog = {
       activeProjectId: normalized.id,
       projects: [buildProjectSnapshot(normalized)],
@@ -894,7 +903,7 @@ function readCatalogOrBootstrap(): { catalog: ProjectCatalog; initialProject: Qu
         : null
     if (!validCatalog) {
       const project = legacyProject || buildSampleProject()
-      const normalized = { ...project, id: project.id || `project-${crypto.randomUUID()}` }
+      const normalized = { ...project, id: project.id || `project-${buildRandomId()}` }
       const fallbackCatalog: ProjectCatalog = {
         activeProjectId: normalized.id,
         projects: [buildProjectSnapshot(normalized)],
@@ -913,7 +922,7 @@ function readCatalogOrBootstrap(): { catalog: ProjectCatalog; initialProject: Qu
 
     if (!loadedActive) {
       const project = legacyProject || buildSampleProject()
-      const normalized = { ...project, id: project.id || `project-${crypto.randomUUID()}` }
+      const normalized = { ...project, id: project.id || `project-${buildRandomId()}` }
       const nextCatalog: ProjectCatalog = {
         activeProjectId: normalized.id,
         projects: [
@@ -937,7 +946,7 @@ function readCatalogOrBootstrap(): { catalog: ProjectCatalog; initialProject: Qu
     return { catalog: normalizedCatalog, initialProject: loadedActive }
   } catch {
     const project = legacyProject || buildSampleProject()
-    const normalized = { ...project, id: project.id || `project-${crypto.randomUUID()}` }
+      const normalized = { ...project, id: project.id || `project-${buildRandomId()}` }
     const fallbackCatalog: ProjectCatalog = {
       activeProjectId: normalized.id,
       projects: [buildProjectSnapshot(normalized)],
@@ -1058,7 +1067,7 @@ function App() {
     setEdges((currentEdges) =>
       addEdge(
         makeEdge(
-          `edge-${connection.source}-${connection.target}-${crypto.randomUUID()}`,
+          `edge-${connection.source}-${connection.target}-${buildRandomId()}`,
           connection.source ?? '',
           connection.target ?? '',
           'Next',
@@ -1118,7 +1127,7 @@ function App() {
     }
     const copy = {
       ...selectedNode,
-      id: `${selectedNode.type}-${crypto.randomUUID()}`,
+      id: prefixedId(selectedNode.type),
       position: {
         x: selectedNode.position.x + 40,
         y: selectedNode.position.y + 40,
@@ -1236,7 +1245,7 @@ function App() {
     }
 
     const firstNode = createNode('start', { x: 120, y: 120 })
-    const nextProjectId = crypto.randomUUID()
+    const nextProjectId = buildRandomId()
     const nextTitle = 'Untitled Quest Graph'
     const nextProject: QuestProject = {
       version: 2,
@@ -1310,7 +1319,7 @@ function App() {
     }
 
     const nextProject = buildSampleProject()
-    nextProject.id = `project-${crypto.randomUUID()}`
+    nextProject.id = `project-${buildRandomId()}`
     setProjectId(nextProject.id)
     setProjectTitle(nextProject.title)
     setNotes(nextProject.notes)
@@ -1387,7 +1396,7 @@ function App() {
     try {
       const parsed = JSON.parse(await file.text()) as Partial<QuestProject>
       const nextProject = migrateProject(parsed)
-      const stableId = nextProject.id || `project-${crypto.randomUUID()}`
+      const stableId = nextProject.id || `project-${buildRandomId()}`
       const importedProject = { ...nextProject, id: stableId }
       setProjectId(stableId)
       setProjectTitle(importedProject.title)
@@ -1472,7 +1481,7 @@ function App() {
 
   const addNote = (kind: NoteKind = 'note') => {
     const nextNote = {
-      id: `note-${crypto.randomUUID()}`,
+      id: prefixedId('note'),
       kind,
       title: kind === 'todo' ? 'New task' : kind === 'reference' ? 'Reference' : 'New note',
       body: '',
@@ -1555,7 +1564,7 @@ function App() {
         if (selectedNode) {
           const copy = {
             ...selectedNode,
-            id: `${selectedNode.type}-${crypto.randomUUID()}`,
+            id: prefixedId(selectedNode.type),
             position: {
               x: selectedNode.position.x + 40,
               y: selectedNode.position.y + 40,
@@ -2136,19 +2145,19 @@ function QuestDesignerPage({
   quests: QuestRecord[]
   worldLocations: WorldMapLocation[]
   graphNodes: QuestNode[]
-  onChange: (quests: QuestRecord[]) => void
+  onChange: StateSet<QuestRecord[]>
   onOpenDialogue: () => void
 }) {
   const updateQuest = (id: string, data: Partial<QuestRecord>) => {
-    onChange(quests.map((quest) => (quest.id === id ? { ...quest, ...data } : quest)))
+    onChange((current) => current.map((quest) => (quest.id === id ? { ...quest, ...data } : quest)))
   }
 
   const addQuest = () => {
     const locationId = worldLocations[0]?.id
-    onChange([
-      ...quests,
+    onChange((current) => [
+      ...current,
       {
-        id: `quest-${crypto.randomUUID()}`,
+        id: prefixedId('quest'),
         title: 'New Quest',
         description: '',
         giver: '',
@@ -2163,46 +2172,58 @@ function QuestDesignerPage({
   }
 
   const updateQuestStages = (questId: string, stages: QuestObjective[]) => {
-    onChange(quests.map((quest) => (quest.id === questId ? { ...quest, stages } : quest)))
+    onChange((current) => current.map((quest) => (quest.id === questId ? { ...quest, stages } : quest)))
   }
 
   const addQuestStage = (questId: string) => {
-    updateQuestStages(
-      questId,
-      [
-        ...(quests.find((quest) => quest.id === questId)?.stages ?? []),
-        {
-          id: `stage-${crypto.randomUUID()}`,
-          title: 'New Stage',
-          description: '',
-          completed: false,
-        },
-      ],
+    onChange((current) =>
+      current.map((quest) =>
+        quest.id !== questId
+          ? quest
+          : {
+              ...quest,
+              stages: [
+                ...(quest.stages ?? []),
+                {
+                  id: prefixedId('stage'),
+                  title: 'New Stage',
+                  description: '',
+                  completed: false,
+                },
+              ],
+            },
+      ),
     )
   }
 
   const updateQuestStage = (questId: string, stageId: string, updates: Partial<QuestObjective>) => {
-    const quest = quests.find((quest) => quest.id === questId)
-    if (!quest) {
-      return
-    }
-    const stages = quest.stages ?? []
-    updateQuestStages(
-      questId,
-      stages.map((stage) => (stage.id === stageId ? { ...stage, ...updates } : stage)),
+    onChange((current) =>
+      current.map((quest) =>
+        quest.id !== questId || !quest.stages
+          ? quest
+          : {
+              ...quest,
+              stages: quest.stages.map((stage) => (stage.id === stageId ? { ...stage, ...updates } : stage)),
+            },
+      ),
     )
   }
 
   const removeQuestStage = (questId: string, stageId: string) => {
-    const quest = quests.find((quest) => quest.id === questId)
-    if (!quest?.stages) {
-      return
-    }
-    updateQuestStages(questId, quest.stages.filter((stage) => stage.id !== stageId))
+    onChange((current) =>
+      current.map((quest) =>
+        quest.id !== questId
+          ? quest
+          : {
+              ...quest,
+              stages: quest.stages.filter((stage) => stage.id !== stageId),
+            },
+      ),
+    )
   }
 
   const deleteQuest = (id: string) => {
-    onChange(quests.filter((quest) => quest.id !== id))
+    onChange((current) => current.filter((quest) => quest.id !== id))
   }
 
   return (
@@ -2308,18 +2329,18 @@ function CharacterCreatorPage({
   characters: CharacterRecord[]
   dialogueNodes: QuestNode[]
   worldLocations: WorldMapLocation[]
-  onChange: (characters: CharacterRecord[]) => void
+  onChange: StateSet<CharacterRecord[]>
 }) {
   const updateCharacter = (id: string, data: Partial<CharacterRecord>) => {
-    onChange(characters.map((character) => (character.id === id ? { ...character, ...data } : character)))
+    onChange((current) => current.map((character) => (character.id === id ? { ...character, ...data } : character)))
   }
 
   const addCharacter = () => {
     const location = worldLocations[0]
-    onChange([
-      ...characters,
+    onChange((current) => [
+      ...current,
       {
-        id: `character-${crypto.randomUUID()}`,
+        id: prefixedId('character'),
         name: 'New Character',
         role: '',
         personality: '',
@@ -2431,7 +2452,7 @@ function WorldBuilderPage({
   world: WorldRecord
   quests: QuestRecord[]
   characters: CharacterRecord[]
-  onChange: (world: WorldRecord) => void
+  onChange: StateSet<WorldRecord>
 }) {
   const [selectedLocationId, setSelectedLocationId] = useState(world.mapLocations[0]?.id ?? '')
   const [quickTownCount, setQuickTownCount] = useState(7)
@@ -2455,7 +2476,7 @@ function WorldBuilderPage({
   const linkedCharacters = characters.filter((character) => character.homeLocationId === selectedLocationId)
   const locationById = Object.fromEntries(world.mapLocations.map((location) => [location.id, location.name]))
 
-  const updateWorld = (data: Partial<WorldRecord>) => onChange({ ...world, ...data })
+  const updateWorld = (data: Partial<WorldRecord>) => onChange((current) => ({ ...current, ...data }))
   const mapPointFromClient = (element: SVGSVGElement, clientX: number, clientY: number) => {
     const rect = element.getBoundingClientRect()
     return {
@@ -2465,50 +2486,55 @@ function WorldBuilderPage({
   }
 
   const updateLocation = (locationId: string, data: Partial<WorldMapLocation>) => {
-    updateWorld({
-      mapLocations: world.mapLocations.map((location) =>
+    onChange((current) => ({
+      ...current,
+      mapLocations: current.mapLocations.map((location) =>
         location.id === locationId ? { ...location, ...data } : location,
       ),
-    })
+    }))
   }
 
   const addLocation = () => {
-    const nextIndex = world.mapLocations.length + 1
-    const nextLocation: WorldMapLocation = {
-      id: `map-location-${crypto.randomUUID()}`,
-      name: `Location ${nextIndex}`,
-      type: 'town',
-      x: 100 + (nextIndex * 97) % (WORLD_CANVAS.width - 180),
-      y: 90 + (nextIndex * 47) % (WORLD_CANVAS.height - 160),
-      description: '',
-      linkedQuestIds: [],
-      linkedCharacterIds: [],
-    }
-    setSelectedLocationId(nextLocation.id)
-    updateWorld({ mapLocations: [...world.mapLocations, nextLocation] })
+    onChange((current) => {
+      const nextIndex = current.mapLocations.length + 1
+      const nextLocation: WorldMapLocation = {
+        id: prefixedId('map-location'),
+        name: `Location ${nextIndex}`,
+        type: 'town',
+        x: 100 + (nextIndex * 97) % (WORLD_CANVAS.width - 180),
+        y: 90 + (nextIndex * 47) % (WORLD_CANVAS.height - 160),
+        description: '',
+        linkedQuestIds: [],
+        linkedCharacterIds: [],
+      }
+      setSelectedLocationId(nextLocation.id)
+      return { ...current, mapLocations: [...current.mapLocations, nextLocation] }
+    })
   }
 
   const removeLocation = (locationId: string) => {
-    updateWorld({
-      mapLocations: world.mapLocations.filter((location) => location.id !== locationId),
-      mapRoutes: world.mapRoutes.filter(
+    onChange((current) => {
+      const nextMapLocations = current.mapLocations.filter((location) => location.id !== locationId)
+      const nextMapRoutes = current.mapRoutes.filter(
         (route) => route.fromLocationId !== locationId && route.toLocationId !== locationId,
-      ),
+      )
+      if (selectedLocationId === locationId) {
+        setSelectedLocationId(nextMapLocations[0]?.id ?? '')
+      }
+      return { ...current, mapLocations: nextMapLocations, mapRoutes: nextMapRoutes }
     })
-    if (selectedLocationId === locationId) {
-      setSelectedLocationId(world.mapLocations.find((location) => location.id !== locationId)?.id ?? '')
-    }
   }
 
   const generateQuickMapLocations = () => {
     const count = Math.max(4, Math.min(12, Number(quickTownCount) || 7))
     const generated = buildQuickMap(world, count)
     const generatedNames = generated.locations.map((location) => location.name)
-    updateWorld({
-      mapLocations: [...world.mapLocations, ...generated.locations],
-      mapRoutes: [...world.mapRoutes, ...generated.routes],
-      locations: [...new Set([...splitLines(world.locations), ...generatedNames])].join('\n'),
-    })
+    onChange((current) => ({
+      ...current,
+      mapLocations: [...current.mapLocations, ...generated.locations],
+      mapRoutes: [...current.mapRoutes, ...generated.routes],
+      locations: [...new Set([...splitLines(current.locations), ...generatedNames])].join('\n'),
+    }))
     if (!selectedLocationId && generated.locations[0]) {
       setSelectedLocationId(generated.locations[0].id)
     }
@@ -2518,11 +2544,12 @@ function WorldBuilderPage({
     if (!newRoute.fromLocationId || !newRoute.toLocationId || newRoute.fromLocationId === newRoute.toLocationId) {
       return
     }
-    updateWorld({
+    onChange((current) => ({
+      ...current,
       mapRoutes: [
-        ...world.mapRoutes,
+        ...current.mapRoutes,
         {
-          id: `route-${crypto.randomUUID()}`,
+          id: prefixedId('route'),
           fromLocationId: newRoute.fromLocationId,
           toLocationId: newRoute.toLocationId,
           type: newRoute.type,
@@ -2530,14 +2557,19 @@ function WorldBuilderPage({
           label: newRoute.label.trim(),
         },
       ],
-    })
-    setNewRoute((current) => ({ ...current, toLocationId: '', label: '' }))
+    }))
+    setNewRoute((current) => ({
+      ...current,
+      toLocationId: '',
+      label: '',
+    }))
   }
 
   const deleteRoute = (routeId: string) => {
-    updateWorld({
-      mapRoutes: world.mapRoutes.filter((route) => route.id !== routeId),
-    })
+    onChange((current) => ({
+      ...current,
+      mapRoutes: current.mapRoutes.filter((route) => route.id !== routeId),
+    }))
   }
 
   const handlePointerDown = (event: React.PointerEvent<SVGElement>, locationId: string) => {
@@ -3847,7 +3879,7 @@ function NotesPanel({
 function createNode(type: QuestNodeKind, position: { x: number; y: number }): QuestNode {
   const meta = nodeMeta[type]
   return {
-    id: `${type}-${crypto.randomUUID()}`,
+    id: prefixedId(type),
     type,
     position,
     data: {
@@ -3986,7 +4018,7 @@ function readStoredQuests(): QuestRecord[] {
     const parsed = JSON.parse(raw) as QuestRecord[]
     return Array.isArray(parsed)
       ? parsed.map((quest) => ({
-          id: quest.id || `quest-${crypto.randomUUID()}`,
+          id: quest.id || prefixedId('quest'),
           title: quest.title || 'Untitled Quest',
           description: quest.description || '',
           giver: quest.giver || '',
@@ -3996,7 +4028,7 @@ function readStoredQuests(): QuestRecord[] {
           locationId: quest.locationId,
           stages: Array.isArray(quest.stages)
             ? quest.stages.map((stage) => ({
-                id: stage.id || `stage-${crypto.randomUUID()}`,
+                id: stage.id || prefixedId('stage'),
                 title: stage.title || '',
                 description: stage.description || '',
                 completed: Boolean(stage.completed),
@@ -4020,7 +4052,7 @@ function readStoredCharacters(): CharacterRecord[] {
     const parsed = JSON.parse(raw) as CharacterRecord[]
     return Array.isArray(parsed)
       ? parsed.map((character) => ({
-          id: character.id || `character-${crypto.randomUUID()}`,
+          id: character.id || prefixedId('character'),
           name: character.name || 'Unnamed character',
           role: character.role || '',
           personality: character.personality || '',
@@ -4051,14 +4083,14 @@ function readStoredWorld(): WorldRecord {
       ...parsed,
       mapRegions: Array.isArray(parsed.mapRegions)
         ? parsed.mapRegions.map((region, index) => ({
-            id: region.id || `region-${crypto.randomUUID()}`,
+            id: region.id || prefixedId('region'),
             name: region.name || `Region ${index + 1}`,
             color: region.color,
           }))
         : sampleWorld.mapRegions,
       mapLocations: Array.isArray(parsed.mapLocations)
         ? parsed.mapLocations.map((location, index) => ({
-            id: location.id || `map-location-${crypto.randomUUID()}`,
+            id: location.id || prefixedId('map-location'),
             name: location.name || `Location ${index + 1}`,
             type: mapLocationTypeOptions.includes(location.type) ? location.type : 'town',
             x: Number.isFinite(location.x) ? location.x : 160 + (index * 120) % (WORLD_CANVAS.width - 140),
@@ -4072,7 +4104,7 @@ function readStoredWorld(): WorldRecord {
         : sampleWorld.mapLocations,
       mapRoutes: Array.isArray(parsed.mapRoutes)
         ? parsed.mapRoutes.map((route) => ({
-            id: route.id || `route-${crypto.randomUUID()}`,
+            id: route.id || prefixedId('route'),
             fromLocationId: route.fromLocationId,
             toLocationId: route.toLocationId,
             type: mapRouteTypeOptions.includes(route.type) ? route.type : 'road',
@@ -4141,12 +4173,12 @@ function validateGeneratedQuest(value: unknown): GeneratedQuest {
   return {
     quest: {
       ...quest,
-      id: quest.id || `quest-${crypto.randomUUID()}`,
+      id: quest.id || prefixedId('quest'),
       status: normalizeQuestStatus(quest.status),
       linkedNodeIds: Array.isArray(quest.linkedNodeIds) ? quest.linkedNodeIds : [],
       stages: Array.isArray(quest.stages)
         ? quest.stages.map((stage) => ({
-            id: stage.id || `stage-${crypto.randomUUID()}`,
+            id: stage.id || prefixedId('stage'),
             title: stage.title || 'Stage',
             description: stage.description || '',
             completed: Boolean(stage.completed),
@@ -4158,7 +4190,7 @@ function validateGeneratedQuest(value: unknown): GeneratedQuest {
     },
     characters: characters.map((character) => ({
       ...character,
-      id: character.id || `character-${crypto.randomUUID()}`,
+      id: character.id || prefixedId('character'),
       role: character.role || 'Unknown',
       personality: character.personality || '',
       faction: character.faction || '',
@@ -4174,7 +4206,7 @@ function validateGeneratedQuest(value: unknown): GeneratedQuest {
 }
 
 function buildLocalGeneratedQuest(form: GeneratorForm, world: WorldRecord): GeneratedQuest {
-  const id = crypto.randomUUID()
+  const id = buildRandomId()
   const title = titleFromIdea(form.idea)
   const giverName = form.idea.toLowerCase().includes('mechanic') ? 'Rook Vale' : 'Ari Vale'
   const locationId = world.mapLocations[0]?.id
@@ -4291,7 +4323,7 @@ function migrateProject(project: Partial<QuestProject>): QuestProject {
 
   return {
     version: 2,
-    id: project.id || crypto.randomUUID(),
+    id: project.id || prefixedId('project'),
     title: project.title || 'Untitled Quest Graph',
     lastSavedAt: project.lastSavedAt,
     notes: Array.isArray(project.notes) ? project.notes : [],
