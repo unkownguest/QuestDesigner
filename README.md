@@ -9,6 +9,7 @@ The current MVP centers on a node-based Dialogue Designer with:
 - a side inspector for node and edge editing
 - graph validation, script export, project JSON export/import, notes, and local autosave
 - a PixiJS-powered 2.5D Stage preview that plays the dialogue tree from app data
+- an AI Quest Generator surface that validates generated JSON before importing it into quests, characters, dialogue nodes, and Preview Mode
 
 ## Run
 
@@ -23,6 +24,16 @@ npm run dev
 npm run lint
 npm run build
 ```
+
+## AI Generator
+
+The browser app does not store AI API keys. For real AI generation, configure a backend/proxy endpoint and expose it as:
+
+```bash
+VITE_AI_GENERATOR_ENDPOINT=/api/generate-quest
+```
+
+The endpoint should accept the generator form and return a `GeneratedQuest` JSON object. The app validates the response before importing anything. Without a configured endpoint, the app can create a local draft for demos.
 
 ## Scope
 

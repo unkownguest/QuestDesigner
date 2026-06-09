@@ -30,15 +30,19 @@ import {
   Flag,
   Gift,
   GitBranch,
+  LayoutDashboard,
+  Map,
   MessageSquareText,
   Milestone,
   Play,
   Plus,
   Save,
   ScrollText,
+  Sparkles,
   Square,
   Trash2,
   Upload,
+  Users,
   Variable,
   XCircle,
 } from 'lucide-react'
@@ -61,6 +65,7 @@ type QuestNodeKind =
   | 'end'
 type QuestEventType = 'start' | 'update' | 'complete' | 'fail'
 type CompareMode = 'equals' | 'not_equals' | 'exists'
+type AppSection = 'dashboard' | 'dialogue' | 'quests' | 'characters' | 'world' | 'ai'
 type InspectorTab = 'inspector' | 'validation' | 'preview' | 'script' | 'notes'
 type NoteKind = 'note' | 'todo' | 'reference'
 
@@ -98,6 +103,49 @@ type QuestProject = {
   edges: QuestEdge[]
 }
 
+type QuestRecord = {
+  id: string
+  title: string
+  description: string
+  giver: string
+  status: QuestEventType
+  objectives: string
+  rewards: string
+}
+
+type CharacterRecord = {
+  id: string
+  name: string
+  role: string
+  personality: string
+  faction: string
+  location: string
+  backstory: string
+  dialogueStyle: string
+}
+
+type WorldRecord = {
+  name: string
+  regions: string
+  locations: string
+  factions: string
+  mainConflict: string
+  setting: string
+}
+
+type GeneratorForm = {
+  idea: string
+  genre: string
+  tone: string
+  context: string
+}
+
+type GeneratedQuest = {
+  quest: QuestRecord
+  characters: CharacterRecord[]
+  project: QuestProject
+}
+
 type ValidationIssue = {
   id: string
   nodeId?: string
@@ -122,6 +170,10 @@ type PreviewState = {
 }
 
 const STORAGE_KEY = 'quest-designer-project'
+const QUESTS_STORAGE_KEY = 'narrative-forge-quests'
+const CHARACTERS_STORAGE_KEY = 'narrative-forge-characters'
+const WORLD_STORAGE_KEY = 'narrative-forge-world'
+const AI_GENERATOR_ENDPOINT = import.meta.env.VITE_AI_GENERATOR_ENDPOINT as string | undefined
 
 const nodeMeta: Record<
   QuestNodeKind,
@@ -202,6 +254,40 @@ const sampleNotes: NoteBlock[] = [
     body: 'If the player refuses, add a later encounter where Mira comments on them staying behind.',
   },
 ]
+
+const sampleQuests: QuestRecord[] = [
+  {
+    id: 'quest-beacon',
+    title: 'Beacon in the Fog',
+    description: 'Relight the abandoned watchtower beacon so travelers can cross the road safely.',
+    giver: 'Mira',
+    status: 'start',
+    objectives: 'Reach the tower\nFind dry oil\nRelight the beacon',
+    rewards: '120 XP\nRanger Charm\nSafe road unlocked',
+  },
+]
+
+const sampleCharacters: CharacterRecord[] = [
+  {
+    id: 'character-mira',
+    name: 'Mira',
+    role: 'Ranger quest giver',
+    personality: 'Direct, protective, exhausted',
+    faction: 'Road Wardens',
+    location: 'Campfire outside the fog road',
+    backstory: 'Mira has watched the road fail for weeks and needs someone reckless enough to enter the fog.',
+    dialogueStyle: 'Short warnings, practical details, no ornament.',
+  },
+]
+
+const sampleWorld: WorldRecord = {
+  name: 'The Fog Road',
+  regions: 'North Watch Road\nAshpine Ridge',
+  locations: 'Mira camp\nAbandoned watchtower\nOld toll gate',
+  factions: 'Road Wardens\nAshpine traders',
+  mainConflict: 'The beacon network is failing, and the fog is cutting towns off from one another.',
+  setting: 'A grounded frontier route where small infrastructure failures become survival problems.',
+}
 
 const sampleNodes: QuestNode[] = [
   {
@@ -494,9 +580,13 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const reactFlowInstance = useRef<ReactFlowInstance<QuestNode, QuestEdge> | null>(null)
   const [initialProject] = useState(readStoredProject)
+  const [activeSection, setActiveSection] = useState<AppSection>('dialogue')
   const [projectId, setProjectId] = useState(initialProject.id)
   const [projectTitle, setProjectTitle] = useState(initialProject.title)
   const [notes, setNotes] = useState<NoteBlock[]>(initialProject.notes)
+  const [quests, setQuests] = useState<QuestRecord[]>(readStoredQuests)
+  const [characters, setCharacters] = useState<CharacterRecord[]>(readStoredCharacters)
+  const [world, setWorld] = useState<WorldRecord>(readStoredWorld)
   const [nodes, setNodes] = useState<QuestNode[]>(initialProject.nodes)
   const [edges, setEdges] = useState<QuestEdge[]>(initialProject.edges)
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(initialProject.nodes[0]?.id ?? null)
@@ -531,6 +621,18 @@ function App() {
 
     return () => window.clearTimeout(timeout)
   }, [project])
+
+  useEffect(() => {
+    localStorage.setItem(QUESTS_STORAGE_KEY, JSON.stringify(quests))
+  }, [quests])
+
+  useEffect(() => {
+    localStorage.setItem(CHARACTERS_STORAGE_KEY, JSON.stringify(characters))
+  }, [characters])
+
+  useEffect(() => {
+    localStorage.setItem(WORLD_STORAGE_KEY, JSON.stringify(world))
+  }, [world])
 
   const onNodesChange: OnNodesChange<QuestNode> = useCallback((changes) => {
     setNodes((currentNodes) => applyNodeChanges(changes, currentNodes))
@@ -798,6 +900,30 @@ function App() {
     }
   }
 
+  const importGeneratedQuest = (generated: GeneratedQuest) => {
+    const nextProject = migrateProject(generated.project)
+    setProjectId(nextProject.id)
+    setProjectTitle(nextProject.title)
+    setNotes(nextProject.notes)
+    setNodes(nextProject.nodes)
+    setEdges(nextProject.edges)
+    setQuests((currentQuests) => [generated.quest, ...currentQuests.filter((quest) => quest.id !== generated.quest.id)])
+    setCharacters((currentCharacters) => {
+      const generatedNames = new Set(generated.characters.map((character) => character.name.toLowerCase()))
+      return [
+        ...generated.characters,
+        ...currentCharacters.filter((character) => !generatedNames.has(character.name.toLowerCase())),
+      ]
+    })
+    setSelectedNodeId(nextProject.nodes[0]?.id ?? null)
+    setSelectedEdgeId(null)
+    setPreview(createPreview(nextProject.nodes))
+    setActiveSection('dialogue')
+    setRightTab('preview')
+    setStageOpen(true)
+    setStatusText('Generated quest imported')
+  }
+
   const addNote = (kind: NoteKind = 'note') => {
     const nextNote = {
       id: `note-${crypto.randomUUID()}`,
@@ -917,6 +1043,11 @@ function App() {
   const previewChoices = currentPreviewNode
     ? edges.filter((edge) => edge.source === currentPreviewNode.id)
     : []
+  const characterNames = useMemo(() => characters.map((character) => character.name).filter(Boolean), [characters])
+  const questLinkedNodes = useMemo(
+    () => nodes.filter((node) => node.type === 'quest_event' || node.type === 'objective' || node.type === 'reward'),
+    [nodes],
+  )
   const displayedNodes = useMemo<QuestNode[]>(
     () =>
       nodes.map((node) => ({
@@ -953,6 +1084,26 @@ function App() {
               />
             </div>
           </div>
+          <nav className="section-nav" aria-label="Narrative Forge sections">
+            {([
+              ['dashboard', LayoutDashboard, 'Dashboard'],
+              ['dialogue', GitBranch, 'Dialogue'],
+              ['quests', ClipboardList, 'Quests'],
+              ['characters', Users, 'Characters'],
+              ['world', Map, 'World'],
+              ['ai', Sparkles, 'AI Generator'],
+            ] as const).map(([section, Icon, label]) => (
+              <button
+                key={section}
+                type="button"
+                className={activeSection === section ? 'is-active' : ''}
+                onClick={() => setActiveSection(section)}
+              >
+                <Icon size={16} aria-hidden="true" />
+                {label}
+              </button>
+            ))}
+          </nav>
           <div className="topbar__actions" aria-label="Project actions">
             <button type="button" onClick={newProject}>
               <Plus size={16} aria-hidden="true" />
@@ -1010,6 +1161,55 @@ function App() {
           />
         </header>
 
+        {activeSection === 'dashboard' && (
+          <DashboardPage
+            projectTitle={projectTitle}
+            nodes={nodes}
+            edges={edges}
+            quests={quests}
+            characters={characters}
+            world={world}
+            validationIssues={validationIssues}
+            onOpenDialogue={() => setActiveSection('dialogue')}
+            onOpenStage={openStage}
+          />
+        )}
+
+        {activeSection === 'quests' && (
+          <QuestDesignerPage
+            quests={quests}
+            graphNodes={questLinkedNodes}
+            onChange={setQuests}
+            onOpenDialogue={() => setActiveSection('dialogue')}
+          />
+        )}
+
+        {activeSection === 'characters' && (
+          <CharacterCreatorPage
+            characters={characters}
+            dialogueNodes={nodes.filter((node) => node.type === 'dialogue')}
+            onChange={setCharacters}
+          />
+        )}
+
+        {activeSection === 'world' && (
+          <WorldBuilderPage
+            world={world}
+            quests={quests}
+            characters={characters}
+            onChange={setWorld}
+          />
+        )}
+
+        {activeSection === 'ai' && (
+          <AiQuestGeneratorPage
+            world={world}
+            characters={characters}
+            onImport={importGeneratedQuest}
+          />
+        )}
+
+        {activeSection === 'dialogue' && (
         <section className="workspace">
           <aside className="palette" aria-label="Add nodes">
             <div className="panel-heading">
@@ -1110,6 +1310,7 @@ function App() {
               <InspectorPanel
                 selectedNode={selectedNode}
                 selectedEdge={selectedEdge}
+                characterNames={characterNames}
                 onDelete={deleteSelection}
                 onDuplicate={duplicateNode}
                 onSetAsStart={setAsStart}
@@ -1152,6 +1353,7 @@ function App() {
             {rightTab === 'script' && <ScriptPanel nodes={nodes} edges={edges} />}
           </aside>
         </section>
+        )}
 
         {stageOpen && (
           <StageOverlay
@@ -1208,9 +1410,427 @@ function QuestFlowNode({ data, type, selected }: NodeProps<QuestNode>) {
   )
 }
 
+function DashboardPage({
+  projectTitle,
+  nodes,
+  edges,
+  quests,
+  characters,
+  world,
+  validationIssues,
+  onOpenDialogue,
+  onOpenStage,
+}: {
+  projectTitle: string
+  nodes: QuestNode[]
+  edges: QuestEdge[]
+  quests: QuestRecord[]
+  characters: CharacterRecord[]
+  world: WorldRecord
+  validationIssues: ValidationIssue[]
+  onOpenDialogue: () => void
+  onOpenStage: () => void
+}) {
+  const dialogueCount = nodes.filter((node) => node.type === 'dialogue').length
+  const choiceCount = nodes.filter((node) => node.type === 'choice').length
+  const issueCount = validationIssues.length
+
+  return (
+    <section className="toolkit-page dashboard-page" aria-label="Dashboard">
+      <div className="page-header">
+        <div>
+          <h1>{projectTitle}</h1>
+          <p>{world.name}: {world.mainConflict}</p>
+        </div>
+        <div className="button-row">
+          <button type="button" onClick={onOpenDialogue}>
+            Open Graph
+          </button>
+          <button type="button" className="button-primary" onClick={onOpenStage}>
+            <Play size={16} aria-hidden="true" />
+            Stage Preview
+          </button>
+        </div>
+      </div>
+
+      <div className="stat-strip">
+        <span><strong>{nodes.length}</strong> nodes</span>
+        <span><strong>{edges.length}</strong> links</span>
+        <span><strong>{dialogueCount}</strong> dialogue lines</span>
+        <span><strong>{choiceCount}</strong> choices</span>
+        <span><strong>{issueCount}</strong> validation flags</span>
+      </div>
+
+      <div className="toolkit-grid">
+        <section className="tool-panel">
+          <div className="panel-heading"><span>Recent Quests</span></div>
+          {quests.map((quest) => (
+            <article key={quest.id} className="row-card">
+              <strong>{quest.title}</strong>
+              <span>{quest.giver} · {quest.status}</span>
+              <p>{quest.description}</p>
+            </article>
+          ))}
+        </section>
+        <section className="tool-panel">
+          <div className="panel-heading"><span>Characters</span></div>
+          {characters.map((character) => (
+            <article key={character.id} className="row-card">
+              <strong>{character.name}</strong>
+              <span>{character.role} · {character.faction}</span>
+              <p>{character.dialogueStyle}</p>
+            </article>
+          ))}
+        </section>
+      </div>
+    </section>
+  )
+}
+
+function QuestDesignerPage({
+  quests,
+  graphNodes,
+  onChange,
+  onOpenDialogue,
+}: {
+  quests: QuestRecord[]
+  graphNodes: QuestNode[]
+  onChange: (quests: QuestRecord[]) => void
+  onOpenDialogue: () => void
+}) {
+  const updateQuest = (id: string, data: Partial<QuestRecord>) => {
+    onChange(quests.map((quest) => (quest.id === id ? { ...quest, ...data } : quest)))
+  }
+
+  const addQuest = () => {
+    onChange([
+      ...quests,
+      {
+        id: `quest-${crypto.randomUUID()}`,
+        title: 'New Quest',
+        description: '',
+        giver: '',
+        status: 'start',
+        objectives: '',
+        rewards: '',
+      },
+    ])
+  }
+
+  const deleteQuest = (id: string) => {
+    onChange(quests.filter((quest) => quest.id !== id))
+  }
+
+  return (
+    <section className="toolkit-page" aria-label="Quest Designer">
+      <div className="page-header">
+        <div>
+          <h1>Quest Designer</h1>
+          <p>Track quest structure beside the dialogue nodes that start, update, and complete it.</p>
+        </div>
+        <button type="button" className="button-primary" onClick={addQuest}>
+          <Plus size={16} aria-hidden="true" />
+          Quest
+        </button>
+      </div>
+
+      <div className="toolkit-grid toolkit-grid--wide">
+        <section className="tool-panel">
+          <div className="panel-heading"><span>Quest Records</span></div>
+          {quests.map((quest) => (
+            <article key={quest.id} className="record-editor">
+              <label>Title<input value={quest.title} onChange={(event) => updateQuest(quest.id, { title: event.target.value })} /></label>
+              <label>Description<textarea rows={3} value={quest.description} onChange={(event) => updateQuest(quest.id, { description: event.target.value })} /></label>
+              <div className="form-grid">
+                <label>Quest Giver<input value={quest.giver} onChange={(event) => updateQuest(quest.id, { giver: event.target.value })} /></label>
+                <label>Status
+                  <select value={quest.status} onChange={(event) => updateQuest(quest.id, { status: event.target.value as QuestEventType })}>
+                    <option value="start">start</option>
+                    <option value="update">update</option>
+                    <option value="complete">complete</option>
+                    <option value="fail">fail</option>
+                  </select>
+                </label>
+              </div>
+              <label>Objectives<textarea rows={4} value={quest.objectives} onChange={(event) => updateQuest(quest.id, { objectives: event.target.value })} /></label>
+              <label>Rewards<textarea rows={3} value={quest.rewards} onChange={(event) => updateQuest(quest.id, { rewards: event.target.value })} /></label>
+              <button type="button" onClick={() => deleteQuest(quest.id)}>Delete Quest</button>
+            </article>
+          ))}
+        </section>
+
+        <section className="tool-panel">
+          <div className="panel-heading"><span>Graph Quest Nodes</span></div>
+          {graphNodes.map((node) => (
+            <article key={node.id} className="row-card">
+              <strong>{node.data.title}</strong>
+              <span>{nodeMeta[node.type as QuestNodeKind].label}</span>
+              <p>{node.data.objective || node.data.reward || node.data.body}</p>
+            </article>
+          ))}
+          <button type="button" onClick={onOpenDialogue}>Edit Quest Nodes in Graph</button>
+        </section>
+      </div>
+    </section>
+  )
+}
+
+function CharacterCreatorPage({
+  characters,
+  dialogueNodes,
+  onChange,
+}: {
+  characters: CharacterRecord[]
+  dialogueNodes: QuestNode[]
+  onChange: (characters: CharacterRecord[]) => void
+}) {
+  const updateCharacter = (id: string, data: Partial<CharacterRecord>) => {
+    onChange(characters.map((character) => (character.id === id ? { ...character, ...data } : character)))
+  }
+
+  const addCharacter = () => {
+    onChange([
+      ...characters,
+      {
+        id: `character-${crypto.randomUUID()}`,
+        name: 'New Character',
+        role: '',
+        personality: '',
+        faction: '',
+        location: '',
+        backstory: '',
+        dialogueStyle: '',
+      },
+    ])
+  }
+
+  return (
+    <section className="toolkit-page" aria-label="Character Creator">
+      <div className="page-header">
+        <div>
+          <h1>Character Creator</h1>
+          <p>Characters here become speaker suggestions in dialogue nodes.</p>
+        </div>
+        <button type="button" className="button-primary" onClick={addCharacter}>
+          <Plus size={16} aria-hidden="true" />
+          Character
+        </button>
+      </div>
+
+      <div className="toolkit-grid toolkit-grid--wide">
+        <section className="tool-panel">
+          <div className="panel-heading"><span>Character Database</span></div>
+          {characters.map((character) => (
+            <article key={character.id} className="record-editor">
+              <div className="form-grid">
+                <label>Name<input value={character.name} onChange={(event) => updateCharacter(character.id, { name: event.target.value })} /></label>
+                <label>Role<input value={character.role} onChange={(event) => updateCharacter(character.id, { role: event.target.value })} /></label>
+                <label>Faction<input value={character.faction} onChange={(event) => updateCharacter(character.id, { faction: event.target.value })} /></label>
+                <label>Location<input value={character.location} onChange={(event) => updateCharacter(character.id, { location: event.target.value })} /></label>
+              </div>
+              <label>Personality<textarea rows={2} value={character.personality} onChange={(event) => updateCharacter(character.id, { personality: event.target.value })} /></label>
+              <label>Backstory<textarea rows={3} value={character.backstory} onChange={(event) => updateCharacter(character.id, { backstory: event.target.value })} /></label>
+              <label>Dialogue Style<textarea rows={2} value={character.dialogueStyle} onChange={(event) => updateCharacter(character.id, { dialogueStyle: event.target.value })} /></label>
+            </article>
+          ))}
+        </section>
+
+        <section className="tool-panel">
+          <div className="panel-heading"><span>Dialogue Usage</span></div>
+          {dialogueNodes.map((node) => (
+            <article key={node.id} className="row-card">
+              <strong>{node.data.character || 'Unassigned'}</strong>
+              <span>{node.data.title}</span>
+              <p>{node.data.body}</p>
+            </article>
+          ))}
+        </section>
+      </div>
+    </section>
+  )
+}
+
+function WorldBuilderPage({
+  world,
+  quests,
+  characters,
+  onChange,
+}: {
+  world: WorldRecord
+  quests: QuestRecord[]
+  characters: CharacterRecord[]
+  onChange: (world: WorldRecord) => void
+}) {
+  const updateWorld = (data: Partial<WorldRecord>) => {
+    onChange({ ...world, ...data })
+  }
+
+  return (
+    <section className="toolkit-page" aria-label="World Builder">
+      <div className="page-header">
+        <div>
+          <h1>World Builder</h1>
+          <p>Keep setting, factions, locations, quests, and characters in one design surface.</p>
+        </div>
+      </div>
+
+      <div className="toolkit-grid toolkit-grid--wide">
+        <section className="tool-panel record-editor">
+          <label>World Name<input value={world.name} onChange={(event) => updateWorld({ name: event.target.value })} /></label>
+          <label>Setting Description<textarea rows={4} value={world.setting} onChange={(event) => updateWorld({ setting: event.target.value })} /></label>
+          <label>Main Conflict<textarea rows={3} value={world.mainConflict} onChange={(event) => updateWorld({ mainConflict: event.target.value })} /></label>
+          <div className="form-grid">
+            <label>Regions<textarea rows={5} value={world.regions} onChange={(event) => updateWorld({ regions: event.target.value })} /></label>
+            <label>Locations<textarea rows={5} value={world.locations} onChange={(event) => updateWorld({ locations: event.target.value })} /></label>
+            <label>Factions<textarea rows={5} value={world.factions} onChange={(event) => updateWorld({ factions: event.target.value })} /></label>
+          </div>
+        </section>
+
+        <section className="tool-panel">
+          <div className="panel-heading"><span>Linked Design Data</span></div>
+          <div className="link-list">
+            <strong>{quests.length} quests</strong>
+            <span>{quests.map((quest) => quest.title).join(', ')}</span>
+            <strong>{characters.length} characters</strong>
+            <span>{characters.map((character) => character.name).join(', ')}</span>
+          </div>
+        </section>
+      </div>
+    </section>
+  )
+}
+
+function AiQuestGeneratorPage({
+  world,
+  characters,
+  onImport,
+}: {
+  world: WorldRecord
+  characters: CharacterRecord[]
+  onImport: (generated: GeneratedQuest) => void
+}) {
+  const [form, setForm] = useState<GeneratorForm>({
+    idea: 'Create a quest about a mechanic who lost a rare engine part in a cyberpunk city.',
+    genre: 'Cyberpunk RPG',
+    tone: 'Tense, grounded, noir',
+    context: '',
+  })
+  const [generated, setGenerated] = useState<GeneratedQuest | null>(null)
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+
+  const updateForm = (data: Partial<GeneratorForm>) => {
+    setForm((current) => ({ ...current, ...data }))
+    setError('')
+  }
+
+  const generateWithApi = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const nextGenerated = await requestGeneratedQuest(form, world, characters)
+      setGenerated(nextGenerated)
+    } catch (requestError) {
+      setError(requestError instanceof Error ? requestError.message : 'AI generation failed.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const generateLocalDraft = () => {
+    try {
+      setGenerated(validateGeneratedQuest(buildLocalGeneratedQuest(form, world)))
+      setError('')
+    } catch (draftError) {
+      setError(draftError instanceof Error ? draftError.message : 'Could not create a draft.')
+    }
+  }
+
+  return (
+    <section className="toolkit-page" aria-label="AI Quest Generator">
+      <div className="page-header">
+        <div>
+          <h1>Generate Playable Quest</h1>
+          <p>Create a reviewed quest package that imports into characters, quests, dialogue nodes, and Preview Mode.</p>
+        </div>
+      </div>
+
+      <div className="toolkit-grid toolkit-grid--wide">
+        <section className="tool-panel record-editor">
+          <label>
+            Quest Idea
+            <textarea
+              rows={4}
+              value={form.idea}
+              onChange={(event) => updateForm({ idea: event.target.value })}
+            />
+          </label>
+          <div className="form-grid">
+            <label>
+              Genre
+              <input value={form.genre} onChange={(event) => updateForm({ genre: event.target.value })} />
+            </label>
+            <label>
+              Tone
+              <input value={form.tone} onChange={(event) => updateForm({ tone: event.target.value })} />
+            </label>
+          </div>
+          <label>
+            Optional Context
+            <textarea
+              rows={5}
+              value={form.context}
+              onChange={(event) => updateForm({ context: event.target.value })}
+              placeholder={`${world.name}: ${world.mainConflict}`}
+            />
+          </label>
+          <div className="button-row">
+            <button type="button" className="button-primary" onClick={generateWithApi} disabled={loading || !form.idea.trim()}>
+              <Sparkles size={16} aria-hidden="true" />
+              {loading ? 'Generating' : 'Generate with API'}
+            </button>
+            <button type="button" onClick={generateLocalDraft} disabled={!form.idea.trim()}>
+              Create Local Draft
+            </button>
+          </div>
+          {error && <p className="error-text">{error}</p>}
+        </section>
+
+        <section className="tool-panel">
+          <div className="panel-heading"><span>Review Package</span></div>
+          {generated ? (
+            <div className="generated-review">
+              <article className="row-card">
+                <strong>{generated.quest.title}</strong>
+                <span>{generated.quest.giver} · {generated.quest.status}</span>
+                <p>{generated.quest.description}</p>
+              </article>
+              <div className="review-list">
+                <span>{generated.characters.length} character record(s)</span>
+                <span>{generated.project.nodes.length} dialogue graph node(s)</span>
+                <span>{generated.project.edges.length} connection(s)</span>
+              </div>
+              <pre>{JSON.stringify(generated, null, 2)}</pre>
+              <button type="button" className="button-primary" onClick={() => onImport(generated)}>
+                Import into Project
+              </button>
+            </div>
+          ) : (
+            <div className="empty-state">
+              <h2>No generated quest</h2>
+              <p>Generate a package, review the JSON, then import it into the project.</p>
+            </div>
+          )}
+        </section>
+      </div>
+    </section>
+  )
+}
+
 function InspectorPanel({
   selectedNode,
   selectedEdge,
+  characterNames,
   onDelete,
   onDuplicate,
   onSetAsStart,
@@ -1221,6 +1841,7 @@ function InspectorPanel({
 }: {
   selectedNode: QuestNode | null
   selectedEdge: QuestEdge | null
+  characterNames: string[]
   onDelete: () => void
   onDuplicate: () => void
   onSetAsStart: () => void
@@ -1246,7 +1867,7 @@ function InspectorPanel({
 
       {selectedNode ? (
         <>
-          <NodeInspector node={selectedNode} onChange={onNodeChange} />
+          <NodeInspector node={selectedNode} characterNames={characterNames} onChange={onNodeChange} />
           <div className="button-row">
             <button type="button" onClick={onDuplicate}>
               Duplicate
@@ -1278,9 +1899,11 @@ function InspectorPanel({
 
 function NodeInspector({
   node,
+  characterNames,
   onChange,
 }: {
   node: QuestNode
+  characterNames: string[]
   onChange: (data: Partial<QuestNodeData>) => void
 }) {
   const kind = node.type as QuestNodeKind
@@ -1315,9 +1938,15 @@ function NodeInspector({
         <label>
           Speaker
           <input
+            list="character-speakers"
             value={node.data.character ?? ''}
             onChange={(event) => onChange({ character: event.target.value })}
           />
+          <datalist id="character-speakers">
+            {characterNames.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
         </label>
       )}
 
@@ -2179,6 +2808,196 @@ function readStoredProject(): QuestProject {
   } catch {
     return buildSampleProject()
   }
+}
+
+function readStoredQuests(): QuestRecord[] {
+  const raw = localStorage.getItem(QUESTS_STORAGE_KEY)
+  if (!raw) {
+    return sampleQuests
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as QuestRecord[]
+    return Array.isArray(parsed) ? parsed : sampleQuests
+  } catch {
+    return sampleQuests
+  }
+}
+
+function readStoredCharacters(): CharacterRecord[] {
+  const raw = localStorage.getItem(CHARACTERS_STORAGE_KEY)
+  if (!raw) {
+    return sampleCharacters
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as CharacterRecord[]
+    return Array.isArray(parsed) ? parsed : sampleCharacters
+  } catch {
+    return sampleCharacters
+  }
+}
+
+function readStoredWorld(): WorldRecord {
+  const raw = localStorage.getItem(WORLD_STORAGE_KEY)
+  if (!raw) {
+    return sampleWorld
+  }
+
+  try {
+    return { ...sampleWorld, ...(JSON.parse(raw) as Partial<WorldRecord>) }
+  } catch {
+    return sampleWorld
+  }
+}
+
+async function requestGeneratedQuest(
+  form: GeneratorForm,
+  world: WorldRecord,
+  characters: CharacterRecord[],
+): Promise<GeneratedQuest> {
+  if (!AI_GENERATOR_ENDPOINT) {
+    throw new Error('AI endpoint is not configured. Set VITE_AI_GENERATOR_ENDPOINT or create a local draft.')
+  }
+
+  const response = await fetch(AI_GENERATOR_ENDPOINT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      idea: form.idea.trim(),
+      genre: form.genre.trim(),
+      tone: form.tone.trim(),
+      context: form.context.trim(),
+      world,
+      characters: characters.slice(0, 12),
+      output: 'GeneratedQuest JSON with quest, characters, and project fields.',
+    }),
+  })
+
+  if (!response.ok) {
+    throw new Error('AI proxy is not available. Check the configured generator endpoint or create a local draft.')
+  }
+
+  return validateGeneratedQuest(await response.json())
+}
+
+function validateGeneratedQuest(value: unknown): GeneratedQuest {
+  const generated = value as Partial<GeneratedQuest>
+  if (!generated.quest || !generated.project || !Array.isArray(generated.characters)) {
+    throw new Error('Generated JSON is incomplete.')
+  }
+
+  const quest = generated.quest as QuestRecord
+  if (!quest.title?.trim() || !quest.description?.trim() || !quest.giver?.trim()) {
+    throw new Error('Generated quest is missing title, description, or quest giver.')
+  }
+
+  const characters = generated.characters as CharacterRecord[]
+  if (characters.some((character) => !character.name?.trim() || !character.role?.trim())) {
+    throw new Error('Generated character records are incomplete.')
+  }
+
+  const project = migrateProject(generated.project)
+  const graphIssues = validateGraph(project.nodes, project.edges).filter((issue) => issue.severity === 'error')
+  if (graphIssues.length > 0) {
+    throw new Error(`Generated graph is not playable: ${graphIssues[0].message}`)
+  }
+
+  return { quest, characters, project }
+}
+
+function buildLocalGeneratedQuest(form: GeneratorForm, world: WorldRecord): GeneratedQuest {
+  const id = crypto.randomUUID()
+  const title = titleFromIdea(form.idea)
+  const giverName = form.idea.toLowerCase().includes('mechanic') ? 'Rook Vale' : 'Ari Vale'
+  const quest: QuestRecord = {
+    id: `quest-${id}`,
+    title,
+    description: `${form.idea.trim()} Built for ${form.genre || 'RPG'} with a ${form.tone || 'grounded'} tone.`,
+    giver: giverName,
+    status: 'start',
+    objectives: 'Meet the quest giver\nInvestigate the missing item\nChoose how to resolve the lead\nReturn for closure',
+    rewards: 'XP\nFaction reputation\nRare crafting component',
+  }
+  const character: CharacterRecord = {
+    id: `character-${id}`,
+    name: giverName,
+    role: 'Quest giver',
+    personality: 'Sharp, worried, practical under pressure',
+    faction: world.factions.split('\n')[0] || 'Independent',
+    location: world.locations.split('\n')[0] || 'Quest hub',
+    backstory: `${giverName} is tied to the problem in the quest idea and needs the player to solve it before the situation escalates.`,
+    dialogueStyle: 'Concise, specific, and slightly guarded.',
+  }
+  const nodePrefix = `generated-${id}`
+  const project: QuestProject = {
+    version: 2,
+    id: `project-${id}`,
+    title,
+    lastSavedAt: new Date().toISOString(),
+    notes: [
+      {
+        id: `note-${id}`,
+        kind: 'note',
+        title: 'Generated brief',
+        body: `Idea: ${form.idea.trim()}\nGenre: ${form.genre}\nTone: ${form.tone}\nContext: ${form.context || world.setting}`,
+      },
+    ],
+    nodes: [
+      createTemplateNode(`${nodePrefix}-start`, 'start', 0, 100, 'Start', `The player meets ${giverName}.`),
+      createTemplateNode(
+        `${nodePrefix}-dialogue`,
+        'dialogue',
+        330,
+        100,
+        'Quest Briefing',
+        `I need help with this: ${form.idea.trim()}`,
+        { character: giverName },
+      ),
+      createTemplateNode(`${nodePrefix}-choice`, 'choice', 660, 100, 'Take the job?', 'The player chooses how to respond.'),
+      createTemplateNode(`${nodePrefix}-quest`, 'quest_event', 990, 0, 'Quest Started', `${title} added to the quest log.`, {
+        eventType: 'start',
+      }),
+      createTemplateNode(`${nodePrefix}-objective`, 'objective', 1320, 0, 'Track the Lead', 'The main objective is added.', {
+        objective: 'Find the missing item and discover who moved it.',
+      }),
+      createTemplateNode(`${nodePrefix}-reward`, 'reward', 1650, 0, 'Resolution Reward', 'The player receives the reward.', {
+        reward: quest.rewards.replace(/\n/g, ', '),
+      }),
+      createTemplateNode(`${nodePrefix}-end-success`, 'end', 1980, 0, 'Quest Complete', 'The quest ends successfully.', {
+        eventType: 'complete',
+      }),
+      createTemplateNode(`${nodePrefix}-decline`, 'dialogue', 990, 230, 'Decline Response', 'Then I need to find someone else before this gets worse.', {
+        character: giverName,
+      }),
+      createTemplateNode(`${nodePrefix}-end-decline`, 'end', 1320, 230, 'Quest Refused', 'The player leaves the quest unresolved.', {
+        eventType: 'fail',
+      }),
+    ],
+    edges: [
+      makeEdge(`${nodePrefix}-edge-1`, `${nodePrefix}-start`, `${nodePrefix}-dialogue`, 'Begin'),
+      makeEdge(`${nodePrefix}-edge-2`, `${nodePrefix}-dialogue`, `${nodePrefix}-choice`, 'Respond'),
+      makeEdge(`${nodePrefix}-edge-3`, `${nodePrefix}-choice`, `${nodePrefix}-quest`, 'Accept'),
+      makeEdge(`${nodePrefix}-edge-4`, `${nodePrefix}-quest`, `${nodePrefix}-objective`, 'Track'),
+      makeEdge(`${nodePrefix}-edge-5`, `${nodePrefix}-objective`, `${nodePrefix}-reward`, 'Complete'),
+      makeEdge(`${nodePrefix}-edge-6`, `${nodePrefix}-reward`, `${nodePrefix}-end-success`, 'End'),
+      makeEdge(`${nodePrefix}-edge-7`, `${nodePrefix}-choice`, `${nodePrefix}-decline`, 'Decline'),
+      makeEdge(`${nodePrefix}-edge-8`, `${nodePrefix}-decline`, `${nodePrefix}-end-decline`, 'Leave'),
+    ],
+  }
+
+  return { quest, characters: [character], project }
+}
+
+function titleFromIdea(idea: string): string {
+  const cleanIdea = idea
+    .replace(/^create a quest about\s+/i, '')
+    .replace(/^a quest about\s+/i, '')
+    .replace(/[.?!]+$/g, '')
+    .trim()
+  const words = cleanIdea.split(/\s+/).filter((word) => !['a', 'an', 'the', 'who', 'lost'].includes(word.toLowerCase()))
+  const titleWords = words.slice(0, 5).map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+  return titleWords.length ? titleWords.join(' ') : 'Generated Quest'
 }
 
 function migrateProject(project: Partial<QuestProject>): QuestProject {
