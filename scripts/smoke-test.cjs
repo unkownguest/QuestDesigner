@@ -33,6 +33,30 @@ async function main() {
     }
   }
 
+  await page.getByRole('button', { name: 'Quests', exact: true }).click()
+  const questPage = page.getByRole('region', { name: 'Quest Designer' })
+  await questPage.locator('label').filter({ hasText: 'Title' }).first().locator('input').fill('Smoke Quest Title')
+
+  await page.getByRole('button', { name: 'Characters', exact: true }).click()
+  const characterPage = page.getByRole('region', { name: 'Character Creator' })
+  await characterPage.getByRole('button', { name: 'Character', exact: true }).click()
+  await characterPage.locator('label').filter({ hasText: 'Name' }).last().locator('input').fill('Smoke Speaker')
+  await characterPage.locator('label').filter({ hasText: 'Role' }).last().locator('input').fill('Test NPC')
+
+  await page.getByRole('button', { name: 'World', exact: true }).click()
+  const worldPage = page.getByRole('region', { name: 'World Builder' })
+  await worldPage.locator('label').filter({ hasText: 'World Name' }).locator('input').fill('Smoke World')
+
+  await page.getByRole('button', { name: 'Dialogue', exact: true }).click()
+  await page.locator('.react-flow__node').filter({ hasText: 'Ranger Greeting' }).click()
+  const speakerOptions = await page
+    .locator('datalist#character-speakers option')
+    .evaluateAll((nodes) => nodes.map((node) => node.getAttribute('value')))
+
+  if (!speakerOptions.includes('Smoke Speaker')) {
+    throw new Error('Character records are not linked into dialogue speaker suggestions.')
+  }
+
   await page.getByRole('button', { name: 'AI Generator' }).click()
   await page.getByRole('button', { name: 'Generate with API' }).click()
   await page.getByText('AI endpoint is not configured').waitFor({ timeout: 10000 })
@@ -47,10 +71,11 @@ async function main() {
   const stored = await page.evaluate(() => ({
     quests: JSON.parse(localStorage.getItem('narrative-forge-quests') || '[]').length,
     characters: JSON.parse(localStorage.getItem('narrative-forge-characters') || '[]').length,
+    worldName: JSON.parse(localStorage.getItem('narrative-forge-world') || '{}').name,
     nodes: JSON.parse(localStorage.getItem('quest-designer-project' ) || '{}')?.nodes?.length || 0,
   }))
 
-  if (stored.quests < 2 || stored.characters < 2 || stored.nodes < 8) {
+  if (stored.quests < 2 || stored.characters < 3 || stored.worldName !== 'Smoke World' || stored.nodes < 8) {
     throw new Error('Generated import did not persist expected project data.')
   }
 
