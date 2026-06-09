@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "smoke": "node scripts/smoke-test.cjs"
+    "smoke": "node scripts/smoke-test.cjs",
+    "smoke:api": "node scripts/api-smoke-test.cjs"
   },
   "dependencies": {
     "@xyflow/react": "^12.11.0",

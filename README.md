@@ -27,13 +27,22 @@ npm run build
 
 ## AI Generator
 
-The browser app does not store AI API keys. For real AI generation, configure a backend/proxy endpoint and expose it as:
+The browser app does not store AI API keys. The repo includes a serverless endpoint at `api/generate-quest.js` for hosts such as Vercel.
+
+Set server-side environment variables:
+
+```bash
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-4.1-mini
+```
+
+For local development, point the frontend at a running proxy:
 
 ```bash
 VITE_AI_GENERATOR_ENDPOINT=/api/generate-quest
 ```
 
-The endpoint should accept the generator form and return a `GeneratedQuest` JSON object. The app validates the response before importing anything. Without a configured endpoint, the app can create a local draft for demos.
+In production builds, the frontend defaults to `/api/generate-quest`. The app validates the response before importing anything. Without a configured endpoint during local Vite development, the app can create a local draft for demos.
 
 ## Scope
 

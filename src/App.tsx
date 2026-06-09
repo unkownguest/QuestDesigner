@@ -173,7 +173,8 @@ const STORAGE_KEY = 'quest-designer-project'
 const QUESTS_STORAGE_KEY = 'narrative-forge-quests'
 const CHARACTERS_STORAGE_KEY = 'narrative-forge-characters'
 const WORLD_STORAGE_KEY = 'narrative-forge-world'
-const AI_GENERATOR_ENDPOINT = import.meta.env.VITE_AI_GENERATOR_ENDPOINT as string | undefined
+const AI_GENERATOR_ENDPOINT =
+  (import.meta.env.VITE_AI_GENERATOR_ENDPOINT as string | undefined) || (import.meta.env.PROD ? '/api/generate-quest' : '')
 
 const nodeMeta: Record<
   QuestNodeKind,
