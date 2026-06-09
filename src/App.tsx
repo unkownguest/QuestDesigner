@@ -135,6 +135,7 @@ type WorldRegion = {
 
 type MapLocationType = 'town' | 'city' | 'village' | 'camp' | 'dungeon' | 'landmark' | 'region'
 type MapRouteType = 'road' | 'trail' | 'river' | 'sea' | 'hidden'
+type WorldMapView = 'flat' | 'isometric'
 
 type WorldMapLocation = {
   id: string
@@ -384,6 +385,51 @@ const countLines = (value: string): number => splitLines(value).length
 const WORLD_CANVAS = {
   width: 1000,
   height: 420,
+}
+
+const WORLD_ISO_MAP = {
+  xScale: WORLD_CANVAS.width * 0.35,
+  yScale: WORLD_CANVAS.height * 0.35,
+  xOffset: WORLD_CANVAS.width * 0.5,
+  yOffset: WORLD_CANVAS.height * 0.15,
+  maxElevation: 34,
+}
+
+const MAP_LOCATION_COLORS: Record<MapLocationType, string> = {
+  camp: '#89ddff',
+  city: '#c792ea',
+  dungeon: '#f06a6a',
+  landmark: '#e8b84d',
+  region: '#6cb6ff',
+  town: '#7dcfff',
+  village: '#a3be8c',
+}
+
+function projectMapLocation(x: number, y: number, height = 0): { x: number; y: number } {
+  const u = x / WORLD_CANVAS.width
+  const v = y / WORLD_CANVAS.height
+  return {
+    x: (u - v) * WORLD_ISO_MAP.xScale + WORLD_ISO_MAP.xOffset,
+    y: (u + v) * WORLD_ISO_MAP.yScale + WORLD_ISO_MAP.yOffset - height,
+  }
+}
+
+function unprojectMapPoint(isoX: number, isoY: number): { x: number; y: number } {
+  const normX = (isoX - WORLD_ISO_MAP.xOffset) / WORLD_ISO_MAP.xScale
+  const normY = (isoY - WORLD_ISO_MAP.yOffset) / WORLD_ISO_MAP.yScale
+  const u = (normX + normY) / 2
+  const v = (normY - normX) / 2
+
+  return {
+    x: clamp(Math.round(u * WORLD_CANVAS.width), 20, WORLD_CANVAS.width - 20),
+    y: clamp(Math.round(v * WORLD_CANVAS.height), 20, WORLD_CANVAS.height - 20),
+  }
+}
+
+function mapLocationElevation(location: WorldMapLocation): number {
+  const linkedQuests = Math.min(3, location.linkedQuestIds.length)
+  const linkedCharacters = Math.min(2, location.linkedCharacterIds.length)
+  return Math.min(WORLD_ISO_MAP.maxElevation, 10 + linkedQuests * 8 + linkedCharacters * 4)
 }
 
 function pick<T>(items: T[], index: number): T {
@@ -2435,6 +2481,7 @@ function WorldBuilderPage({
 }) {
   const [selectedLocationId, setSelectedLocationId] = useState(world.mapLocations[0]?.id ?? '')
   const [quickTownCount, setQuickTownCount] = useState(7)
+  const [mapView, setMapView] = useState<WorldMapView>('isometric')
   const [dragState, setDragState] = useState<{
     locationId: string
     pointerX: number
@@ -2456,11 +2503,23 @@ function WorldBuilderPage({
   const locationById = Object.fromEntries(world.mapLocations.map((location) => [location.id, location.name]))
 
   const updateWorld = (data: Partial<WorldRecord>) => onChange({ ...world, ...data })
-  const mapPointFromClient = (element: SVGSVGElement, clientX: number, clientY: number) => {
+  const mapPointFromClient = (
+    element: SVGSVGElement,
+    clientX: number,
+    clientY: number,
+    mapMode: WorldMapView,
+  ) => {
     const rect = element.getBoundingClientRect()
+    const normalizedX = ((clientX - rect.left) / rect.width) * WORLD_CANVAS.width
+    const normalizedY = ((clientY - rect.top) / rect.height) * WORLD_CANVAS.height
+    if (mapMode === 'flat') {
+      return {
+        x: clamp(normalizedX, 20, WORLD_CANVAS.width - 20),
+        y: clamp(normalizedY, 20, WORLD_CANVAS.height - 20),
+      }
+    }
     return {
-      x: clamp(((clientX - rect.left) / rect.width) * WORLD_CANVAS.width, 20, WORLD_CANVAS.width - 20),
-      y: clamp(((clientY - rect.top) / rect.height) * WORLD_CANVAS.height, 20, WORLD_CANVAS.height - 20),
+      ...unprojectMapPoint(normalizedX, normalizedY),
     }
   }
 
@@ -2550,7 +2609,7 @@ function WorldBuilderPage({
       return
     }
 
-    const point = mapPointFromClient(svg, event.clientX, event.clientY)
+    const point = mapPointFromClient(svg, event.clientX, event.clientY, mapView)
     setSelectedLocationId(locationId)
     setDragState({
       locationId,
@@ -2566,7 +2625,7 @@ function WorldBuilderPage({
     if (!dragState) {
       return
     }
-    const point = mapPointFromClient(event.currentTarget, event.clientX, event.clientY)
+    const point = mapPointFromClient(event.currentTarget, event.clientX, event.clientY, mapView)
     updateLocation(dragState.locationId, {
       x: Math.round(clamp(dragState.startX + (point.x - dragState.pointerX), 20, WORLD_CANVAS.width - 20)),
       y: Math.round(clamp(dragState.startY + (point.y - dragState.pointerY), 20, WORLD_CANVAS.height - 20)),
@@ -2677,52 +2736,44 @@ function WorldBuilderPage({
         <section className="tool-panel">
           <div className="panel-heading">
             <span>World Map</span>
-          </div>
-          <svg
-            className="world-map-canvas"
-            viewBox={`0 0 ${WORLD_CANVAS.width} ${WORLD_CANVAS.height}`}
-            onPointerMove={handlePointerMove}
-            onPointerUp={handlePointerUp}
-            onPointerLeave={handlePointerUp}
-          >
-            <rect width={WORLD_CANVAS.width} height={WORLD_CANVAS.height} fill="#101217" stroke="#343a46" />
-            {world.mapRoutes.map((route) => {
-              const from = world.mapLocations.find((location) => location.id === route.fromLocationId)
-              const to = world.mapLocations.find((location) => location.id === route.toLocationId)
-              if (!from || !to) {
-                return null
-              }
-              const lineColor =
-                route.danger === 'safe' ? '#7dcfff' : route.danger === 'contested' ? '#f7c56c' : '#f06a6a'
-              return (
-                <g key={route.id}>
-                  <line x1={from.x} y1={from.y} x2={to.x} y2={to.y} stroke={lineColor} strokeWidth={3} strokeLinecap="round" />
-                  <text x={(from.x + to.x) / 2} y={(from.y + to.y) / 2} fill="#9aa3b2" fontSize={11} textAnchor="middle">
-                    {route.label || route.type}
-                  </text>
-                </g>
-              )
-            })}
-            {world.mapLocations.map((location) => (
-              <g
-                key={location.id}
-                onClick={() => setSelectedLocationId(location.id)}
-                onPointerDown={(event) => handlePointerDown(event, location.id)}
+            <div className="world-map-mode-switch" role="tablist" aria-label="Map view mode">
+              <button
+                type="button"
+                className={mapView === 'flat' ? 'is-active' : ''}
+                onClick={() => setMapView('flat')}
               >
-                <circle
-                  cx={location.x}
-                  cy={location.y}
-                  r={10}
-                  fill={selectedLocationId === location.id ? '#ffcb6b' : '#6cb6ff'}
-                  stroke="#181b22"
-                  strokeWidth={2}
-                />
-                <text x={location.x + 10} y={location.y - 10} fill="#e7eaf0" fontSize={11}>
-                  {location.name}
-                </text>
-              </g>
-            ))}
-          </svg>
+                2D
+              </button>
+              <button
+                type="button"
+                className={mapView === 'isometric' ? 'is-active' : ''}
+                onClick={() => setMapView('isometric')}
+              >
+                3D
+              </button>
+            </div>
+          </div>
+          {mapView === 'isometric' ? (
+            <WorldBuilder3DMap
+              locations={world.mapLocations}
+              routes={world.mapRoutes}
+              selectedLocationId={selectedLocationId}
+              onSelectLocation={setSelectedLocationId}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+            />
+          ) : (
+            <WorldBuilderFlatMap
+              locations={world.mapLocations}
+              routes={world.mapRoutes}
+              selectedLocationId={selectedLocationId}
+              onSelectLocation={setSelectedLocationId}
+              onPointerDown={handlePointerDown}
+              onPointerMove={handlePointerMove}
+              onPointerUp={handlePointerUp}
+            />
+          )}
           <div className="form-grid">
             <label>Linked Quests
               <span>{linkedQuests.length}</span>
@@ -2809,7 +2860,262 @@ function WorldBuilderPage({
           </div>
         </section>
       </div>
-    </section>
+  </section>
+  )
+}
+
+function WorldBuilderFlatMap({
+  locations,
+  routes,
+  selectedLocationId,
+  onSelectLocation,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+}: {
+  locations: WorldMapLocation[]
+  routes: WorldMapRoute[]
+  selectedLocationId: string
+  onSelectLocation: (locationId: string) => void
+  onPointerDown: (event: React.PointerEvent<SVGElement>, locationId: string) => void
+  onPointerMove: (event: React.PointerEvent<SVGSVGElement>) => void
+  onPointerUp: () => void
+}) {
+  return (
+    <svg
+      className="world-map-canvas"
+      viewBox={`0 0 ${WORLD_CANVAS.width} ${WORLD_CANVAS.height}`}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerUp}
+    >
+      <rect width={WORLD_CANVAS.width} height={WORLD_CANVAS.height} fill="#101217" stroke="#343a46" />
+      {routes.map((route) => {
+        const from = locations.find((location) => location.id === route.fromLocationId)
+        const to = locations.find((location) => location.id === route.toLocationId)
+        if (!from || !to) {
+          return null
+        }
+        const lineColor =
+          route.danger === 'safe' ? '#7dcfff' : route.danger === 'contested' ? '#f7c56c' : '#f06a6a'
+        return (
+          <g key={route.id}>
+            <line
+              x1={from.x}
+              y1={from.y}
+              x2={to.x}
+              y2={to.y}
+              stroke={lineColor}
+              strokeWidth={3}
+              strokeLinecap="round"
+            />
+            <text x={(from.x + to.x) / 2} y={(from.y + to.y) / 2} fill="#9aa3b2" fontSize={11} textAnchor="middle">
+              {route.label || route.type}
+            </text>
+          </g>
+        )
+      })}
+      {locations.map((location) => (
+        <g
+          key={location.id}
+          onClick={() => onSelectLocation(location.id)}
+          onPointerDown={(event) => onPointerDown(event, location.id)}
+        >
+          <circle
+            cx={location.x}
+            cy={location.y}
+            r={10}
+            fill={selectedLocationId === location.id ? '#ffcb6b' : '#6cb6ff'}
+            stroke="#181b22"
+            strokeWidth={2}
+          />
+          <text x={location.x + 10} y={location.y - 10} fill="#e7eaf0" fontSize={11}>
+            {location.name}
+          </text>
+        </g>
+      ))}
+    </svg>
+  )
+}
+
+function WorldBuilder3DMap({
+  locations,
+  routes,
+  selectedLocationId,
+  onSelectLocation,
+  onPointerDown,
+  onPointerMove,
+  onPointerUp,
+}: {
+  locations: WorldMapLocation[]
+  routes: WorldMapRoute[]
+  selectedLocationId: string
+  onSelectLocation: (locationId: string) => void
+  onPointerDown: (event: React.PointerEvent<SVGElement>, locationId: string) => void
+  onPointerMove: (event: React.PointerEvent<SVGSVGElement>) => void
+  onPointerUp: () => void
+}) {
+  return (
+    <svg
+      className="world-map-canvas world-map-canvas--3d"
+      viewBox={`0 0 ${WORLD_CANVAS.width} ${WORLD_CANVAS.height}`}
+      preserveAspectRatio="none"
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      onPointerLeave={onPointerUp}
+    >
+      <defs>
+        <linearGradient id="map-floor" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor="#171c26" />
+          <stop offset="100%" stopColor="#090b10" />
+        </linearGradient>
+        <linearGradient id="map-shadow" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stopColor="#00000000" />
+          <stop offset="100%" stopColor="#000000b8" />
+        </linearGradient>
+      </defs>
+      <rect width={WORLD_CANVAS.width} height={WORLD_CANVAS.height} fill="url(#map-floor)" stroke="#343a46" />
+      {Array.from({ length: 7 }).map((_, index) => {
+        const progress = index / 6
+        const left = projectMapLocation(progress * WORLD_CANVAS.width * 0.1, WORLD_CANVAS.height * (0.2 + progress * 0.6), 0)
+        const right = projectMapLocation(progress * WORLD_CANVAS.width * 0.9, WORLD_CANVAS.height * (0.2 + progress * 0.6), 0)
+        const top = projectMapLocation(WORLD_CANVAS.width * (0.2 + progress * 0.6), progress * WORLD_CANVAS.height * 0.1, 0)
+        const bottom = projectMapLocation(
+          WORLD_CANVAS.width * (0.2 + progress * 0.6),
+          WORLD_CANVAS.height * (0.9 + progress * 0.08),
+          0,
+        )
+        return (
+          <g key={`grid-${index}`}>
+            <line
+              x1={left.x}
+              y1={left.y}
+              x2={right.x}
+              y2={right.y}
+              stroke="#1f2631"
+              strokeWidth={1.2}
+            />
+            <line
+              x1={top.x}
+              y1={top.y}
+              x2={bottom.x}
+              y2={bottom.y}
+              stroke="#1f2631"
+              strokeWidth={1.2}
+              strokeOpacity={0.8}
+            />
+          </g>
+        )
+      })}
+      {routes.map((route) => {
+        const from = locations.find((location) => location.id === route.fromLocationId)
+        const to = locations.find((location) => location.id === route.toLocationId)
+        if (!from || !to) {
+          return null
+        }
+
+        const fromHeight = mapLocationElevation(from) * 0.55
+        const toHeight = mapLocationElevation(to) * 0.55
+        const fromPoint = projectMapLocation(from.x, from.y, fromHeight)
+        const toPoint = projectMapLocation(to.x, to.y, toHeight)
+        const lineColor =
+          route.danger === 'safe' ? '#89ddff' : route.danger === 'contested' ? '#f7c56c' : '#f06a6a'
+        const isHidden = route.type === 'river' || route.type === 'sea'
+
+        return (
+          <g key={route.id}>
+            <line
+              x1={fromPoint.x}
+              y1={fromPoint.y}
+              x2={toPoint.x}
+              y2={toPoint.y}
+              stroke={lineColor}
+              strokeWidth={3}
+              strokeLinecap="round"
+              strokeDasharray={isHidden ? '6 6' : undefined}
+              strokeOpacity={0.95}
+            />
+            <text
+              x={(fromPoint.x + toPoint.x) / 2}
+              y={(fromPoint.y + toPoint.y) / 2 - 6}
+              fill="#9aa3b2"
+              fontSize={10.5}
+              textAnchor="middle"
+              className="world-map-label"
+            >
+              {route.label || route.type}
+            </text>
+          </g>
+        )
+      })}
+      {locations.map((location) => {
+        const elevation = mapLocationElevation(location)
+        const point = projectMapLocation(location.x, location.y, elevation * 0.45)
+        const isSelected = selectedLocationId === location.id
+        const color = MAP_LOCATION_COLORS[location.type]
+        const nameOffset = Math.max(12, 12 + elevation * 0.12)
+
+        return (
+          <g
+            key={location.id}
+            onPointerDown={(event) => onPointerDown(event, location.id)}
+            onClick={() => onSelectLocation(location.id)}
+          >
+            <line
+              x1={point.x}
+              y1={point.y}
+              x2={point.x}
+              y2={point.y + elevation}
+              stroke="#10151f"
+              strokeWidth={2.4}
+            />
+            <ellipse
+              cx={point.x}
+              cy={point.y + 4}
+              rx={9}
+              ry={3}
+              fill="url(#map-shadow)"
+              opacity={0.7}
+            />
+            <rect
+              x={point.x - 10}
+              y={point.y - elevation}
+              width={20}
+              height={12 + elevation * 0.25}
+              rx={4}
+              fill={`${color}2a`}
+              stroke={isSelected ? '#ffcb6b' : `${color}`}
+              strokeWidth={1.6}
+            />
+            <rect
+              x={point.x - 7}
+              y={point.y - elevation - 11}
+              width={14}
+              height={10}
+              rx={3}
+              fill={isSelected ? '#ffcb6b' : color}
+            />
+            <ellipse
+              cx={point.x}
+              cy={point.y - elevation - 2}
+              rx={8.5}
+              ry={3.4}
+              fill={isSelected ? '#ffcb6b' : color}
+              opacity={0.6}
+            />
+            <text
+              x={point.x + nameOffset}
+              y={point.y - elevation - 10}
+              fill="#f8f9fc"
+              fontSize={11}
+              className="world-map-label"
+            >
+              {location.name}
+            </text>
+          </g>
+        )
+      })}
+    </svg>
   )
 }
 
