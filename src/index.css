@@ -21,16 +21,12 @@ body,
 #root {
   min-width: 320px;
   min-height: 100%;
+  width: 100%;
   margin: 0;
 }
 
 body {
   min-height: 100svh;
-  overflow: hidden;
-}
-
-@media (max-width: 900px) {
-  body {
-    overflow: auto;
-  }
+  overflow: auto;
+  background: #111318;
 }

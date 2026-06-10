@@ -49,11 +49,14 @@ npm run build
 
 The browser app does not store AI API keys. The repo includes a serverless endpoint at `api/generate-quest.js` for hosts such as Vercel.
 
+You do **not** need OpenAI/Codex API credentials in the frontend. For local development without a configured backend endpoint, the generator falls back to an offline local draft so you can still create and import a complete quest package.
+
 Set server-side environment variables:
 
 ```bash
-OPENAI_API_KEY=...
-OPENAI_MODEL=gpt-4.1-mini
+OPENAI_API_KEY=...         # or CODEX_API_KEY=...
+AI_MODEL=gpt-4.1-mini      # optional override (also accepts OPENAI_MODEL for backward compatibility)
+AI_RESPONSES_URL=https://api.openai.com/v1/responses  # optional override
 ```
 
 For local development, point the frontend at a running proxy:
@@ -62,7 +65,8 @@ For local development, point the frontend at a running proxy:
 VITE_AI_GENERATOR_ENDPOINT=/api/generate-quest
 ```
 
-In production builds, the frontend defaults to `/api/generate-quest`. The app validates the response before importing anything. Without a configured endpoint during local Vite development, the app can create a local draft for demos.
+In production builds, and now also by default in local development, the frontend uses `/api/generate-quest`.
+The app validates the response before importing anything. If the endpoint is unavailable, it falls back to an internal local draft.
 
 ## Scope
 

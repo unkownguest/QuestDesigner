@@ -1,4 +1,5 @@
-const OPENAI_RESPONSES_URL = 'https://api.openai.com/v1/responses'
+const AI_RESPONSES_URL = process.env.AI_RESPONSES_URL || 'https://api.openai.com/v1/responses'
+const DEFAULT_AI_MODEL = process.env.AI_MODEL || process.env.OPENAI_MODEL || 'gpt-4.1-mini'
 
 const outputSchema = {
   type: 'object',
@@ -72,28 +73,34 @@ function normalizeInput(body = {}) {
     genre: String(body.genre || 'RPG').trim().slice(0, 160),
     tone: String(body.tone || 'Grounded').trim().slice(0, 160),
     context: String(body.context || '').trim().slice(0, 1600),
+    objectives: String(body.objectives || '').trim().slice(0, 1200),
+    complications: String(body.complications || '').trim().slice(0, 1200),
+    styleNotes: String(body.styleNotes || '').trim().slice(0, 1200),
+    requiredOutcome: String(body.requiredOutcome || '').trim().slice(0, 1200),
+    failureConditions: String(body.failureConditions || '').trim().slice(0, 1200),
+    worldHooks: String(body.worldHooks || '').trim().slice(0, 1200),
     world: body.world && typeof body.world === 'object' ? body.world : {},
     characters: Array.isArray(body.characters) ? body.characters.slice(0, 8) : [],
   }
 }
 
 async function generateQuestPackage(input) {
-  const apiKey = process.env.OPENAI_API_KEY
+  const apiKey = process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY
   if (!apiKey) {
-    const error = new Error('OPENAI_API_KEY is not configured.')
+    const error = new Error('AI API key is not configured. Set OPENAI_API_KEY or CODEX_API_KEY.')
     error.statusCode = 500
     throw error
   }
 
-  const response = await fetch(OPENAI_RESPONSES_URL, {
+  const response = await fetch(AI_RESPONSES_URL, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || 'gpt-4.1-mini',
-      input: [
+      model: DEFAULT_AI_MODEL,
+                input: [
         {
           role: 'user',
           content: [
@@ -104,6 +111,12 @@ async function generateQuestPackage(input) {
                 'Return only data that can become a playable branching dialogue quest.',
                 'Avoid copyrighted settings, real people, sexual content, hateful content, and graphic violence.',
                 JSON.stringify(input),
+                input.objectives ? `Focus on these objectives: ${input.objectives}` : '',
+                input.complications ? `Include these complications or twists: ${input.complications}` : '',
+                input.styleNotes ? `Dialogue and tone notes: ${input.styleNotes}` : '',
+                input.requiredOutcome ? `Required outcome before completion: ${input.requiredOutcome}` : '',
+                input.failureConditions ? `Failure or penalty guidance: ${input.failureConditions}` : '',
+                input.worldHooks ? `Tie this into these world hooks: ${input.worldHooks}` : '',
               ].join('\n\n'),
             },
           ],
@@ -177,7 +190,7 @@ function toGeneratedQuest(aiPackage, input) {
           id: `note-${id}`,
           kind: 'note',
           title: 'AI generation brief',
-          body: `Idea: ${input.idea}\nGenre: ${input.genre}\nTone: ${input.tone}\nContext: ${input.context || input.world?.setting || ''}`,
+          body: `Idea: ${input.idea}\nGenre: ${input.genre}\nTone: ${input.tone}\nRequired Outcome: ${input.requiredOutcome}\nObjectives: ${input.objectives}\nComplications: ${input.complications}\nFailure / Stakes: ${input.failureConditions}\nWorld Hooks: ${input.worldHooks}\nContext: ${input.context || input.world?.setting || ''}`,
         },
       ],
       nodes: buildNodes(prefix, title, giver, aiPackage, objectives, rewards),

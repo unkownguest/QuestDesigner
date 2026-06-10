@@ -69,6 +69,7 @@ type CompareMode = 'equals' | 'not_equals' | 'exists'
 type AppSection = 'dashboard' | 'dialogue' | 'quests' | 'characters' | 'world' | 'ai'
 type InspectorTab = 'inspector' | 'validation' | 'preview' | 'script' | 'notes'
 type NoteKind = 'note' | 'todo' | 'reference'
+type ListUpdater<T> = (next: T[] | ((current: T[]) => T[])) => void
 
 type QuestNodeData = {
   title: string
@@ -191,6 +192,12 @@ type GeneratorForm = {
   genre: string
   tone: string
   context: string
+  objectives: string
+  complications: string
+  styleNotes: string
+  requiredOutcome: string
+  failureConditions: string
+  worldHooks: string
 }
 
 type GeneratedQuest = {
@@ -242,7 +249,7 @@ const QUESTS_STORAGE_KEY = 'narrative-forge-quests'
 const CHARACTERS_STORAGE_KEY = 'narrative-forge-characters'
 const WORLD_STORAGE_KEY = 'narrative-forge-world'
 const AI_GENERATOR_ENDPOINT =
-  (import.meta.env.VITE_AI_GENERATOR_ENDPOINT as string | undefined) || (import.meta.env.PROD ? '/api/generate-quest' : '')
+  (import.meta.env.VITE_AI_GENERATOR_ENDPOINT as string | undefined) || '/api/generate-quest'
 
 const nodeMeta: Record<
   QuestNodeKind,
@@ -565,6 +572,21 @@ const sampleWorld: WorldRecord = {
       label: 'Old roadline',
     },
   ],
+}
+
+function createEmptyWorld(): WorldRecord {
+  return {
+    name: '',
+    regions: '',
+    locations: '',
+    factions: '',
+    mainConflict: '',
+    setting: '',
+    toneStyle: '',
+    mapRegions: [],
+    mapLocations: [],
+    mapRoutes: [],
+  }
 }
 
 const sampleNodes: QuestNode[] = [
@@ -1012,10 +1034,12 @@ function App() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const reactFlowInstance = useRef<ReactFlowInstance<QuestNode, QuestEdge> | null>(null)
   const hasCenteredDialogueRef = useRef(false)
+  const projectActionMenuRef = useRef<HTMLDivElement>(null)
   const [projectCatalog, setProjectCatalog] = useState<ProjectCatalog>(bootstrap.catalog)
   const [initialProject] = useState(bootstrap.initialProject)
   const [activeSection, setActiveSection] = useState<AppSection>('dialogue')
   const [projectId, setProjectId] = useState(initialProject.id)
+  const [workspaceResetToken, setWorkspaceResetToken] = useState(0)
   const [projectTitle, setProjectTitle] = useState(initialProject.title)
   const [notes, setNotes] = useState<NoteBlock[]>(initialProject.notes)
   const [quests, setQuests] = useState<QuestRecord[]>(readStoredQuests)
@@ -1029,6 +1053,7 @@ function App() {
   const [rightTab, setRightTab] = useState<InspectorTab>('inspector')
   const [preview, setPreview] = useState<PreviewState>(() => createPreview(nodes))
   const [stageOpen, setStageOpen] = useState(false)
+  const [projectActionMenuOpen, setProjectActionMenuOpen] = useState(false)
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId) ?? null
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId) ?? null
@@ -1125,37 +1150,32 @@ function App() {
     [setSelectedEdgeId, setSelectedNodeId],
   )
 
-  const addQuestNode = (type: QuestNodeKind) => {
+  const addQuestNode = (
+    type: QuestNodeKind,
+    options?: {
+      questId?: string
+      questObjectiveId?: string
+      title?: string
+      body?: string
+      data?: Partial<QuestNodeData>
+    },
+  ) => {
     const position = reactFlowInstance.current?.screenToFlowPosition({
       x: window.innerWidth / 2,
       y: window.innerHeight / 2,
     }) ?? { x: 240 + nodes.length * 24, y: 140 + nodes.length * 20 }
-    const nextNode = createNode(type, position)
+    const nextNode = createNode(type, position, {
+      ...options?.data,
+      ...(options?.questId ? { questId: options.questId } : {}),
+      ...(options?.questObjectiveId ? { questObjectiveId: options.questObjectiveId } : {}),
+      ...(options?.title ? { title: options.title } : {}),
+      ...(options?.body ? { body: options.body } : {}),
+    })
     setNodes((currentNodes) => [...currentNodes, nextNode])
     setSelectedNodeId(nextNode.id)
     setSelectedEdgeId(null)
     setRightTab('inspector')
     setStatusText(`${nodeMeta[type].label} added`)
-  }
-
-  const addLinkedNode = (type: QuestNodeKind) => {
-    if (!selectedNode) {
-      addQuestNode(type)
-      return
-    }
-
-    const nextNode = createNode(type, {
-      x: selectedNode.position.x + 330,
-      y: selectedNode.position.y,
-    })
-    setNodes((currentNodes) => [...currentNodes, nextNode])
-    setEdges((currentEdges) => [
-      ...currentEdges,
-      makeEdge(`edge-${selectedNode.id}-${nextNode.id}`, selectedNode.id, nextNode.id, 'Next'),
-    ])
-    setSelectedNodeId(nextNode.id)
-    setSelectedEdgeId(null)
-    setStatusText(`${nodeMeta[type].label} linked`)
   }
 
   const duplicateNode = () => {
@@ -1276,8 +1296,67 @@ function App() {
     setStatusText('Saved just now')
   }
 
+  const clearStoredWorkspace = (nextProject: QuestProject) => {
+    const resetWorld = createEmptyWorld()
+    setQuests([])
+    setCharacters([])
+    setWorld(resetWorld)
+    localStorage.removeItem(QUESTS_STORAGE_KEY)
+    localStorage.removeItem(CHARACTERS_STORAGE_KEY)
+    localStorage.removeItem(WORLD_STORAGE_KEY)
+    localStorage.setItem(QUESTS_STORAGE_KEY, JSON.stringify([]))
+    localStorage.setItem(CHARACTERS_STORAGE_KEY, JSON.stringify([]))
+    localStorage.setItem(WORLD_STORAGE_KEY, JSON.stringify(resetWorld))
+    localStorage.removeItem(STORAGE_KEY)
+    Object.keys(localStorage).forEach((key) => {
+      if (key.startsWith(PROJECT_STORAGE_PREFIX)) {
+        localStorage.removeItem(key)
+      }
+    })
+    const nextCatalog: ProjectCatalog = {
+      activeProjectId: nextProject.id,
+      projects: [buildProjectSnapshot(nextProject)],
+    }
+    setProjectCatalog(nextCatalog)
+    localStorage.setItem(PROJECT_CATALOG_KEY, JSON.stringify(nextCatalog))
+    saveProjectCatalog(nextCatalog)
+    localStorage.setItem(projectStorageKey(nextProject.id), JSON.stringify(nextProject))
+  }
+
+  const resetWorkspace = () => {
+    const firstNode = createNode('start', { x: 120, y: 120 })
+    const nextProjectId = crypto.randomUUID()
+    const nextTitle = 'Untitled Quest Graph'
+    const nextProject: QuestProject = {
+      version: 2,
+      id: nextProjectId,
+      title: nextTitle,
+      lastSavedAt: new Date().toISOString(),
+      notes: [],
+      nodes: [firstNode],
+      edges: [],
+    }
+
+    setProjectId(nextProjectId)
+    setWorkspaceResetToken((current) => current + 1)
+    setProjectTitle(nextTitle)
+    setNotes([])
+    setNodes(nextProject.nodes)
+    setEdges(nextProject.edges)
+    setSelectedNodeId(firstNode.id)
+    setSelectedEdgeId(null)
+    clearStoredWorkspace(nextProject)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextProject))
+    setActiveSection('dashboard')
+    setRightTab('inspector')
+    setPreview(createPreview([firstNode]))
+    hasCenteredDialogueRef.current = false
+    setStatusText('Workspace reset')
+    centerDialogueView([firstNode])
+  }
+
   const newProject = () => {
-    if (nodes.length > 0 && !window.confirm('Start a new graph? Your current graph is autosaved.')) {
+    if (nodes.length > 0 && !window.confirm('Start a new project and erase everything in this workspace?')) {
       return
     }
 
@@ -1294,21 +1373,20 @@ function App() {
       edges: [],
     }
     setProjectId(nextProjectId)
+    setWorkspaceResetToken((current) => current + 1)
     setProjectTitle(nextTitle)
     setNotes([])
     setNodes(nextProject.nodes)
     setEdges(nextProject.edges)
+    clearStoredWorkspace(nextProject)
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextProject))
+    setActiveSection('dialogue')
+    setRightTab('inspector')
     setSelectedNodeId(firstNode.id)
     setSelectedEdgeId(null)
     setPreview(createPreview([firstNode]))
     hasCenteredDialogueRef.current = false
     centerDialogueView([firstNode])
-    setProjectCatalog((current) => {
-      const nextCatalog = upsertProjectSnapshot(current, nextProject)
-      localStorage.setItem(projectStorageKey(nextProjectId), JSON.stringify(nextProject))
-      saveProjectCatalog(nextCatalog)
-      return nextCatalog
-    })
     setStatusText('New graph created')
     return
   }
@@ -1460,41 +1538,78 @@ function App() {
   const importGeneratedQuest = (generated: GeneratedQuest) => {
     const nextProject = migrateProject(generated.project)
     const generatedQuest = generated.quest
-    const mapLocationIds = new Set(world.mapLocations.map((location) => location.id))
-    const nextWorld = mapLocationIds.size
+    const generatedCharacters = generated.characters.map((character) => ({ ...character }))
+    const hasWorldLocations = world.mapLocations.length > 0
+    const existingLocationIds = new Set(world.mapLocations.map((location) => location.id))
+    const hasGeneratedSeedLocation = existingLocationIds.size > 0 || generatedCharacters.length > 0 || Boolean(generatedQuest.locationId)
+    const seededLocation = !hasWorldLocations && hasGeneratedSeedLocation
       ? {
-          ...world,
-          mapLocations: world.mapLocations.map((location) => {
-            const hasQuestLink = generatedQuest.locationId === location.id
-            const hasCharacter = generated.characters.some((character) => character.homeLocationId === location.id)
-            if (!hasQuestLink && !hasCharacter) {
-              return location
-            }
-            const linkedQuestIds = hasQuestLink
-              ? [...new Set([generatedQuest.id, ...location.linkedQuestIds])]
-              : location.linkedQuestIds
-            const linkedCharacterIds = hasCharacter
-              ? [...new Set([...location.linkedCharacterIds, ...generated.characters.map((character) => character.id)])]
-              : location.linkedCharacterIds
-            return {
-              ...location,
-              linkedQuestIds,
-              linkedCharacterIds,
-            }
-          }),
+          id: `map-generated-${Date.now()}`,
+          name: `${generatedQuest.title} Site`,
+          type: 'town',
+          x: WORLD_CANVAS.width * 0.36,
+          y: WORLD_CANVAS.height * 0.52,
+          region: world.regions.split('\n')[0] || 'Generated region',
+          faction: world.factions.split('\n')[0] || 'Independent',
+          description: `Auto-linked location for generated quest: ${generatedQuest.title}.`,
+          linkedQuestIds: [],
+          linkedCharacterIds: [],
         }
+      : null
+    const generatedWorld = seededLocation
+      ? { ...world, mapLocations: [...world.mapLocations, seededLocation] }
       : world
+    const generatedWorldLocationIds = new Set(generatedWorld.mapLocations.map((location) => location.id))
+
+    const linkedQuestLocationId = generatedQuest.locationId && generatedWorldLocationIds.has(generatedQuest.locationId)
+      ? generatedQuest.locationId
+      : generatedWorld.mapLocations[0]?.id
+
+    const nextCharacters = generatedCharacters.map((character) => ({
+      ...character,
+      homeLocationId: character.homeLocationId && generatedWorldLocationIds.has(character.homeLocationId)
+        ? character.homeLocationId
+        : linkedQuestLocationId,
+    }))
+    const generatedNodeIds = nextProject.nodes
+      .filter((node) => node.data?.questId === generatedQuest.id)
+      .map((node) => node.id)
+    const importedQuest = {
+      ...generatedQuest,
+      id: generatedQuest.id || `quest-${crypto.randomUUID()}`,
+      linkedNodeIds: generatedQuest.linkedNodeIds?.length ? generatedQuest.linkedNodeIds : generatedNodeIds,
+    }
+    const nextWorld = {
+      ...generatedWorld,
+      mapLocations: generatedWorld.mapLocations.map((location) => {
+        const hasQuestLink = Boolean(linkedQuestLocationId && location.id === linkedQuestLocationId)
+        const hasCharacter = nextCharacters.some((character) => character.homeLocationId === location.id)
+        if (!hasQuestLink && !hasCharacter) {
+          return location
+        }
+        return {
+          ...location,
+          linkedQuestIds: hasQuestLink ? [...new Set([importedQuest.id, ...location.linkedQuestIds])] : location.linkedQuestIds,
+          linkedCharacterIds: hasCharacter
+            ? [...new Set([...location.linkedCharacterIds, ...nextCharacters.map((character) => character.id)])]
+            : location.linkedCharacterIds,
+        }
+      }),
+    }
+
+    const generatedCharacterNameSet = new Set(nextCharacters.map((character) => character.name.toLowerCase()))
+    const generatedCharacterIdSet = new Set(nextCharacters.map((character) => character.id))
 
     setProjectId(nextProject.id)
     setProjectTitle(nextProject.title)
     setNotes(nextProject.notes)
     setNodes(nextProject.nodes)
     setEdges(nextProject.edges)
-    setQuests((currentQuests) => [generated.quest, ...currentQuests.filter((quest) => quest.id !== generated.quest.id)])
+    setQuests((currentQuests) => [importedQuest, ...currentQuests.filter((quest) => quest.id !== importedQuest.id)])
     setCharacters((currentCharacters) => {
-      const generatedNames = new Set(generated.characters.map((character) => character.name.toLowerCase()))
+      const generatedNames = generatedCharacterNameSet
       return [
-        ...generated.characters,
+        ...nextCharacters,
         ...currentCharacters.filter((character) => !generatedNames.has(character.name.toLowerCase())),
       ]
     })
@@ -1637,13 +1752,47 @@ function App() {
     }
   }, [activeSection, centerDialogueView, nodes])
 
+  useEffect(() => {
+    if (!projectActionMenuOpen) {
+      return
+    }
+
+    const onPointerDown = (event: MouseEvent) => {
+      if (event.target instanceof Node && !projectActionMenuRef.current?.contains(event.target)) {
+        setProjectActionMenuOpen(false)
+      }
+    }
+
+    window.addEventListener('mousedown', onPointerDown)
+    return () => window.removeEventListener('mousedown', onPointerDown)
+  }, [projectActionMenuOpen])
+
   const currentPreviewNode = nodes.find((node) => node.id === preview.currentNodeId) ?? null
   const previewChoices = currentPreviewNode
     ? edges.filter((edge) => edge.source === currentPreviewNode.id)
     : []
   const characterNames = useMemo(() => characters.map((character) => character.name).filter(Boolean), [characters])
   const questLinkedNodes = useMemo(
-    () => nodes.filter((node) => node.type === 'quest_event' || node.type === 'objective' || node.type === 'reward'),
+    () =>
+      nodes.filter(
+        (node) =>
+          node.type !== 'start' &&
+          node.type !== 'dialogue' &&
+          (node.data.questId ||
+            node.data.questObjectiveId ||
+            node.data.eventType ||
+            node.data.reward ||
+            node.data.variableName ||
+            node.data.comparison ||
+            node.data.objective ||
+            node.type === 'choice' ||
+            node.type === 'condition' ||
+            node.type === 'set_variable' ||
+            node.type === 'quest_event' ||
+            node.type === 'objective' ||
+            node.type === 'reward' ||
+            node.type === 'end'),
+      ),
     [nodes],
   )
   const displayedNodes = useMemo<QuestNode[]>(
@@ -1703,10 +1852,43 @@ function App() {
             ))}
           </nav>
           <div className="topbar__actions" aria-label="Project actions">
-            <button type="button" onClick={newProject}>
-              <Plus size={16} aria-hidden="true" />
-              New
-            </button>
+            <div
+              ref={projectActionMenuRef}
+              className={`topbar__menu ${projectActionMenuOpen ? 'topbar__menu--open' : ''}`}
+            >
+              <button
+                type="button"
+                className="topbar__menu-trigger button-primary"
+                onClick={() => setProjectActionMenuOpen((open) => !open)}
+              >
+                New
+                <ChevronDown size={14} aria-hidden="true" />
+              </button>
+              {projectActionMenuOpen && (
+                <div className="topbar__menu-panel">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProjectActionMenuOpen(false)
+                      newProject()
+                    }}
+                  >
+                    <Plus size={16} aria-hidden="true" />
+                    New
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProjectActionMenuOpen(false)
+                      resetWorkspace()
+                    }}
+                  >
+                    <Trash2 size={14} aria-hidden="true" />
+                    Reset Workspace
+                  </button>
+                </div>
+              )}
+            </div>
             <button type="button" onClick={saveProject}>
               <Save size={16} aria-hidden="true" />
               Save
@@ -1776,6 +1958,7 @@ function App() {
 
         {activeSection === 'dashboard' && (
           <DashboardPage
+            key={`dashboard-${projectId}-${workspaceResetToken}`}
             activeProjectId={projectId}
             projectCatalog={projectCatalog}
             onLoadProject={loadProjectById}
@@ -1788,21 +1971,25 @@ function App() {
             validationIssues={validationIssues}
             onOpenDialogue={() => setActiveSection('dialogue')}
             onOpenStage={openStage}
+            onResetWorkspace={resetWorkspace}
           />
         )}
 
         {activeSection === 'quests' && (
           <QuestDesignerPage
+            key={`quests-${projectId}-${workspaceResetToken}`}
             quests={quests}
             graphNodes={questLinkedNodes}
             worldLocations={world.mapLocations}
             onChange={setQuests}
+            onAddNode={addQuestNode}
             onOpenDialogue={() => setActiveSection('dialogue')}
           />
         )}
 
         {activeSection === 'characters' && (
           <CharacterCreatorPage
+            key={`characters-${projectId}-${workspaceResetToken}`}
             characters={characters}
             dialogueNodes={nodes.filter((node) => node.type === 'dialogue')}
             worldLocations={world.mapLocations}
@@ -1812,6 +1999,7 @@ function App() {
 
         {activeSection === 'world' && (
           <WorldBuilderPage
+            key={`world-${projectId}-${workspaceResetToken}`}
             world={world}
             quests={quests}
             characters={characters}
@@ -1821,6 +2009,7 @@ function App() {
 
         {activeSection === 'ai' && (
           <AiQuestGeneratorPage
+            key={`ai-${projectId}-${workspaceResetToken}`}
             world={world}
             characters={characters}
             onImport={importGeneratedQuest}
@@ -1828,7 +2017,7 @@ function App() {
         )}
 
         {activeSection === 'dialogue' && (
-        <section className="workspace">
+          <section key={`dialogue-${projectId}-${workspaceResetToken}`} className="workspace">
           <aside className="palette" aria-label="Add nodes">
             <div className="panel-heading">
               <span>Node Palette</span>
@@ -1855,23 +2044,6 @@ function App() {
               })}
             </div>
 
-            <div className="quick-actions">
-              <div className="panel-heading">
-                <span>Quick Add</span>
-              </div>
-              <button type="button" onClick={() => addLinkedNode('choice')} disabled={!selectedNode}>
-                Add Choice
-              </button>
-              <button type="button" onClick={() => addLinkedNode('quest_event')} disabled={!selectedNode}>
-                Add Quest Update
-              </button>
-              <button type="button" onClick={() => addLinkedNode('reward')} disabled={!selectedNode}>
-                Add Reward
-              </button>
-              <button type="button" onClick={() => addLinkedNode('end')} disabled={!selectedNode}>
-                Add End
-              </button>
-            </div>
           </aside>
 
           <section className="canvas-shell" aria-label="Dialogue graph canvas">
@@ -2050,6 +2222,7 @@ function DashboardPage({
   onLoadProject,
   onOpenDialogue,
   onOpenStage,
+  onResetWorkspace,
 }: {
   activeProjectId: string
   projectCatalog: ProjectCatalog
@@ -2063,10 +2236,11 @@ function DashboardPage({
   onLoadProject: (projectId: string) => void
   onOpenDialogue: () => void
   onOpenStage: () => void
+  onResetWorkspace: () => void
 }) {
   const dialogueCount = nodes.filter((node) => node.type === 'dialogue').length
   const choiceCount = nodes.filter((node) => node.type === 'choice').length
-  const treeCount = projectCatalog.projects.length
+  const treeCount = nodes.filter((node) => node.type === 'start').length
   const locationCount = world.mapLocations.length
   const factionCount = countLines(world.factions)
   const issueCount = validationIssues.length
@@ -2081,6 +2255,9 @@ function DashboardPage({
           <p>{world.name}: {world.mainConflict}</p>
         </div>
         <div className="button-row">
+          <button type="button" onClick={onResetWorkspace}>
+            Reset Workspace
+          </button>
           <button type="button" onClick={onOpenDialogue}>
             Open Graph
           </button>
@@ -2177,22 +2354,35 @@ function QuestDesignerPage({
   worldLocations,
   graphNodes,
   onChange,
+  onAddNode,
   onOpenDialogue,
 }: {
   quests: QuestRecord[]
   worldLocations: WorldMapLocation[]
   graphNodes: QuestNode[]
-  onChange: (quests: QuestRecord[]) => void
+  onChange: ListUpdater<QuestRecord>
+  onAddNode: (
+    type: QuestNodeKind,
+    options?: {
+      questId?: string
+      questObjectiveId?: string
+      title?: string
+      body?: string
+      data?: Partial<QuestNodeData>
+    },
+  ) => void
   onOpenDialogue: () => void
 }) {
+  const [selectedQuestId, setSelectedQuestId] = useState(quests[0]?.id ?? '')
+
   const updateQuest = (id: string, data: Partial<QuestRecord>) => {
-    onChange(quests.map((quest) => (quest.id === id ? { ...quest, ...data } : quest)))
+    onChange((current) => current.map((quest) => (quest.id === id ? { ...quest, ...data } : quest)))
   }
 
   const addQuest = () => {
     const locationId = worldLocations[0]?.id
-    onChange([
-      ...quests,
+    onChange((current) => [
+      ...current,
       {
         id: `quest-${crypto.randomUUID()}`,
         title: 'New Quest',
@@ -2208,47 +2398,67 @@ function QuestDesignerPage({
     ])
   }
 
-  const updateQuestStages = (questId: string, stages: QuestObjective[]) => {
-    onChange(quests.map((quest) => (quest.id === questId ? { ...quest, stages } : quest)))
-  }
-
   const addQuestStage = (questId: string) => {
-    updateQuestStages(
-      questId,
-      [
-        ...(quests.find((quest) => quest.id === questId)?.stages ?? []),
-        {
-          id: `stage-${crypto.randomUUID()}`,
-          title: 'New Stage',
-          description: '',
-          completed: false,
-        },
-      ],
+    onChange((current) =>
+      current.map((quest) =>
+        quest.id !== questId
+          ? quest
+          : {
+              ...quest,
+              stages: [
+                ...(quest.stages ?? []),
+                {
+                  id: `stage-${crypto.randomUUID()}`,
+                  title: 'New Stage',
+                  description: '',
+                  completed: false,
+                },
+              ],
+            },
+      ),
     )
   }
 
   const updateQuestStage = (questId: string, stageId: string, updates: Partial<QuestObjective>) => {
-    const quest = quests.find((quest) => quest.id === questId)
-    if (!quest) {
-      return
-    }
-    const stages = quest.stages ?? []
-    updateQuestStages(
-      questId,
-      stages.map((stage) => (stage.id === stageId ? { ...stage, ...updates } : stage)),
+    onChange((current) =>
+      current.map((quest) =>
+        quest.id !== questId
+          ? quest
+          : {
+              ...quest,
+              stages: (quest.stages ?? []).map((stage) => (stage.id === stageId ? { ...stage, ...updates } : stage)),
+            },
+      ),
     )
   }
 
   const removeQuestStage = (questId: string, stageId: string) => {
-    const quest = quests.find((quest) => quest.id === questId)
-    if (!quest?.stages) {
-      return
-    }
-    updateQuestStages(questId, quest.stages.filter((stage) => stage.id !== stageId))
+    onChange((current) =>
+      current.map((quest) =>
+        quest.id !== questId
+          ? quest
+          : {
+              ...quest,
+              stages: (quest.stages ?? []).filter((stage) => stage.id !== stageId),
+            },
+      ),
+    )
   }
 
   const deleteQuest = (id: string) => {
-    onChange(quests.filter((quest) => quest.id !== id))
+    onChange((current) => current.filter((quest) => quest.id !== id))
+  }
+
+  const selectedQuestIdSafe = quests.some((quest) => quest.id === selectedQuestId)
+    ? selectedQuestId
+    : quests[0]?.id ?? ''
+
+  const addSimpleQuestNode = (type: QuestNodeKind) => {
+    const targetQuestId = selectedQuestIdSafe
+    if (!targetQuestId) {
+      return
+    }
+    onAddNode(type, { questId: targetQuestId })
   }
 
   return (
@@ -2265,6 +2475,37 @@ function QuestDesignerPage({
       </div>
 
       <div className="toolkit-grid toolkit-grid--wide">
+        <section className="tool-panel">
+          <div className="panel-heading">
+            <span>Quick Quest Nodes</span>
+          </div>
+          <label>
+            Link new nodes to quest
+            <select value={selectedQuestIdSafe} onChange={(event) => setSelectedQuestId(event.target.value)}>
+              {quests.length === 0 ? <option value="">No quests yet</option> : null}
+              {quests.map((quest) => (
+                <option key={quest.id} value={quest.id}>
+                  {quest.title}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="button-row">
+            <button type="button" onClick={() => addSimpleQuestNode('choice')} disabled={!selectedQuestIdSafe}>
+              Add Choice
+            </button>
+            <button type="button" onClick={() => addSimpleQuestNode('quest_event')} disabled={!selectedQuestIdSafe}>
+              Add Quest Update
+            </button>
+            <button type="button" onClick={() => addSimpleQuestNode('reward')} disabled={!selectedQuestIdSafe}>
+              Add Reward
+            </button>
+            <button type="button" onClick={() => addSimpleQuestNode('end')} disabled={!selectedQuestIdSafe}>
+              Add End
+            </button>
+          </div>
+          {quests.length === 0 ? <p className="issue-empty">Add a quest first, then create quest nodes.</p> : null}
+        </section>
         <section className="tool-panel">
           <div className="panel-heading"><span>Quest Records</span></div>
           {quests.map((quest) => (
@@ -2323,7 +2564,18 @@ function QuestDesignerPage({
                 ))}
                 {(quest.stages ?? []).length === 0 ? <span className="issue-empty">No stages added yet.</span> : null}
               </div>
-              <label>Rewards<textarea rows={3} value={quest.rewards} onChange={(event) => updateQuest(quest.id, { rewards: event.target.value })} /></label>
+                <label>Rewards<textarea rows={3} value={quest.rewards} onChange={(event) => updateQuest(quest.id, { rewards: event.target.value })} /></label>
+              <div className="button-row">
+                <button type="button" onClick={() => onAddNode('quest_event', { questId: quest.id })}>
+                  Add Quest Update Node
+                </button>
+                <button type="button" onClick={() => onAddNode('reward', { questId: quest.id })}>
+                  Add Reward Node
+                </button>
+                <button type="button" onClick={() => onAddNode('end', { questId: quest.id })}>
+                  Add End Node
+                </button>
+              </div>
               <button type="button" onClick={() => deleteQuest(quest.id)}>Delete Quest</button>
             </article>
           ))}
@@ -2354,16 +2606,16 @@ function CharacterCreatorPage({
   characters: CharacterRecord[]
   dialogueNodes: QuestNode[]
   worldLocations: WorldMapLocation[]
-  onChange: (characters: CharacterRecord[]) => void
+  onChange: ListUpdater<CharacterRecord>
 }) {
   const updateCharacter = (id: string, data: Partial<CharacterRecord>) => {
-    onChange(characters.map((character) => (character.id === id ? { ...character, ...data } : character)))
+    onChange((current) => current.map((character) => (character.id === id ? { ...character, ...data } : character)))
   }
 
   const addCharacter = () => {
     const location = worldLocations[0]
-    onChange([
-      ...characters,
+    onChange((current) => [
+      ...current,
       {
         id: `character-${crypto.randomUUID()}`,
         name: 'New Character',
@@ -3133,24 +3385,48 @@ function AiQuestGeneratorPage({
     genre: 'Cyberpunk RPG',
     tone: 'Tense, grounded, noir',
     context: '',
+    objectives: '',
+    complications: '',
+    styleNotes: 'Concise, practical dialogue with short, concrete beats.',
+    requiredOutcome: 'Resolve the issue and restore trust at the fog gate checkpoint.',
+    failureConditions: '',
+    worldHooks: '',
   })
   const [generated, setGenerated] = useState<GeneratedQuest | null>(null)
   const [error, setError] = useState('')
+  const [info, setInfo] = useState('')
   const [loading, setLoading] = useState(false)
+  const hasAIEndpoint = Boolean(AI_GENERATOR_ENDPOINT)
 
   const updateForm = (data: Partial<GeneratorForm>) => {
     setForm((current) => ({ ...current, ...data }))
     setError('')
+    setInfo('')
   }
 
   const generateWithApi = async () => {
     setLoading(true)
     setError('')
+    setInfo('')
     try {
+      if (!hasAIEndpoint) {
+        setGenerated(validateGeneratedQuest(buildLocalGeneratedQuest(form, world)))
+        setInfo('No AI endpoint configured. A local draft was generated.')
+        setLoading(false)
+        return
+      }
+
       const nextGenerated = await requestGeneratedQuest(form, world, characters)
       setGenerated(nextGenerated)
+      setInfo('AI endpoint generated a playable quest package.')
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'AI generation failed.')
+      try {
+        setGenerated(validateGeneratedQuest(buildLocalGeneratedQuest(form, world)))
+        const message = requestError instanceof Error ? requestError.message : 'AI generation failed.'
+        setInfo(`AI endpoint failed (${message}). Generated fallback draft instead.`)
+      } catch {
+        setError(requestError instanceof Error ? requestError.message : 'AI generation failed.')
+      }
     } finally {
       setLoading(false)
     }
@@ -3160,6 +3436,7 @@ function AiQuestGeneratorPage({
     try {
       setGenerated(validateGeneratedQuest(buildLocalGeneratedQuest(form, world)))
       setError('')
+      setInfo('Local draft generated.')
     } catch (draftError) {
       setError(draftError instanceof Error ? draftError.message : 'Could not create a draft.')
     }
@@ -3203,16 +3480,81 @@ function AiQuestGeneratorPage({
               placeholder={`${world.name}: ${world.mainConflict}`}
             />
           </label>
+          <label>
+            Required Outcome
+            <textarea
+              rows={3}
+              value={form.requiredOutcome}
+              onChange={(event) => updateForm({ requiredOutcome: event.target.value })}
+              placeholder="What must the player accomplish for the quest to be complete?"
+            />
+          </label>
+          <label>
+            Core Objectives
+            <textarea
+              rows={3}
+              value={form.objectives}
+              onChange={(event) => updateForm({ objectives: event.target.value })}
+              placeholder="Key beats to hit in order (for example: find engine part, identify thief, secure evidence)."
+            />
+          </label>
+          <label>
+            NPC & Dialogue Direction
+            <textarea
+              rows={3}
+      value={form.styleNotes}
+      onChange={(event) => updateForm({ styleNotes: event.target.value })}
+      placeholder="Voice, cadence, and manner: formal, terse, comedic, ominous..."
+            />
+          </label>
+          <label>
+            Complications / Twists
+            <textarea
+              rows={3}
+              value={form.complications}
+              onChange={(event) => updateForm({ complications: event.target.value })}
+              placeholder="Add turns, restrictions, moral dilemmas, or hidden goals."
+            />
+          </label>
+          <label>
+            Failure / Stakes
+            <textarea
+              rows={3}
+              value={form.failureConditions}
+              onChange={(event) => updateForm({ failureConditions: event.target.value })}
+              placeholder="What happens if the player fails, delays, or abandons the quest?"
+            />
+          </label>
+          <label>
+            World Hooks
+            <textarea
+              rows={3}
+              value={form.worldHooks}
+              onChange={(event) => updateForm({ worldHooks: event.target.value })}
+              placeholder="Tie this into existing factions, locations, lore events, and recurring motifs."
+            />
+          </label>
           <div className="button-row">
-            <button type="button" className="button-primary" onClick={generateWithApi} disabled={loading || !form.idea.trim()}>
+            <button
+              type="button"
+              className="button-primary"
+              onClick={generateWithApi}
+              disabled={loading || !form.idea.trim()}
+              title={
+                hasAIEndpoint
+                  ? 'Generate using configured AI endpoint'
+                  : 'Generate offline draft (no endpoint configured)'
+              }
+            >
               <Sparkles size={16} aria-hidden="true" />
-              {loading ? 'Generating' : 'Generate with API'}
+              {loading ? 'Generating' : hasAIEndpoint ? 'Generate with API' : 'Generate Draft'}
             </button>
             <button type="button" onClick={generateLocalDraft} disabled={!form.idea.trim()}>
               Create Local Draft
             </button>
           </div>
           {error && <p className="error-text">{error}</p>}
+          {info && <p className="muted">{info}</p>}
         </section>
 
         <section className="tool-panel">
@@ -4150,7 +4492,11 @@ function NotesPanel({
   )
 }
 
-function createNode(type: QuestNodeKind, position: { x: number; y: number }): QuestNode {
+function createNode(
+  type: QuestNodeKind,
+  position: { x: number; y: number },
+  dataOverrides: Partial<QuestNodeData> = {},
+): QuestNode {
   const meta = nodeMeta[type]
   return {
     id: `${type}-${crypto.randomUUID()}`,
@@ -4176,6 +4522,7 @@ function createNode(type: QuestNodeKind, position: { x: number; y: number }): Qu
       comparison: type === 'condition' ? 'equals' : undefined,
       compareValue: type === 'condition' ? 'true' : undefined,
       objective: type === 'objective' ? 'Reach the next location' : undefined,
+      ...dataOverrides,
     },
   }
 }
@@ -4409,6 +4756,12 @@ async function requestGeneratedQuest(
       genre: form.genre.trim(),
       tone: form.tone.trim(),
       context: form.context.trim(),
+      objectives: form.objectives.trim(),
+      complications: form.complications.trim(),
+      styleNotes: form.styleNotes.trim(),
+      requiredOutcome: form.requiredOutcome.trim(),
+      failureConditions: form.failureConditions.trim(),
+      worldHooks: form.worldHooks.trim(),
       world,
       characters: characters.slice(0, 12),
       output: 'GeneratedQuest JSON with quest, characters, and project fields.',
@@ -4485,20 +4838,27 @@ function buildLocalGeneratedQuest(form: GeneratorForm, world: WorldRecord): Gene
   const giverName = form.idea.toLowerCase().includes('mechanic') ? 'Rook Vale' : 'Ari Vale'
   const locationId = world.mapLocations[0]?.id
   const objectiveId = `objective-${id}`
+  const objectiveLines = splitLines(form.objectives.trim() || 'Meet the quest giver; find the missing item; discover who moved it')
+  const complicationLine = form.complications.trim() || 'No major complications requested.'
+  const styleLine = form.styleNotes.trim() || 'Balanced pacing and clear, practical dialogue.'
+  const outcomeLine = form.requiredOutcome.trim() || 'Restore order and complete the task successfully.'
+  const failureLine = form.failureConditions.trim() || 'Failure has light consequences but keeps the quest recoverable.'
+  const worldHooksLine = form.worldHooks.trim() || 'No strong recurring world hooks were added.'
+  const objectivesText = objectiveLines.length ? objectiveLines.join('\n') : 'Meet the quest giver\nFind the missing item\nResolve the objective'
   const quest: QuestRecord = {
     id: `quest-${id}`,
     title,
-    description: `${form.idea.trim()} Built for ${form.genre || 'RPG'} with a ${form.tone || 'grounded'} tone.`,
+    description: `${form.idea.trim()} Built for ${form.genre || 'RPG'} with a ${form.tone || 'grounded'} tone. Outcome: ${outcomeLine}.`,
     giver: giverName,
     status: 'start',
-    objectives: 'Meet the quest giver\nInvestigate the missing item\nChoose how to resolve the lead\nReturn for closure',
+    objectives: objectivesText,
     rewards: 'XP\nFaction reputation\nRare crafting component',
     locationId,
     stages: [
       {
         id: objectiveId,
-        title: 'Find the missing item',
-        description: 'Track the missing component and return proof.',
+        title: objectiveLines[0] || 'Find the missing item',
+        description: `Track the objective while handling: ${complicationLine}`,
         completed: false,
       },
     ],
@@ -4526,7 +4886,7 @@ function buildLocalGeneratedQuest(form: GeneratorForm, world: WorldRecord): Gene
         id: `note-${id}`,
         kind: 'note',
         title: 'Generated brief',
-        body: `Idea: ${form.idea.trim()}\nGenre: ${form.genre}\nTone: ${form.tone}\nContext: ${form.context || world.setting}`,
+        body: `Idea: ${form.idea.trim()}\nGenre: ${form.genre}\nTone: ${form.tone}\nRequired Outcome: ${outcomeLine}\nObjectives: ${objectivesText}\nStyle Notes: ${styleLine}\nComplications: ${complicationLine}\nFailure / Stakes: ${failureLine}\nWorld Hooks: ${worldHooksLine}\nContext: ${form.context || world.setting}`,
       },
     ],
     nodes: [

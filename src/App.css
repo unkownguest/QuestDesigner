@@ -1,5 +1,7 @@
 .quest-app {
   min-height: 100svh;
+  width: 100%;
+  overflow: auto;
   display: grid;
   grid-template-rows: auto 1fr;
   background: #111318;
@@ -91,7 +93,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   justify-content: flex-end;
   min-width: 0;
 }
@@ -100,6 +102,11 @@
   position: relative;
   z-index: 2;
   display: inline-flex;
+}
+
+.topbar__menu--open .topbar__menu-trigger {
+  border-color: #6cb6ff;
+  background: #262b35;
 }
 
 .topbar__menu-trigger {
@@ -135,6 +142,7 @@
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
+  z-index: 20;
   display: grid;
   gap: 6px;
   min-width: 170px;
