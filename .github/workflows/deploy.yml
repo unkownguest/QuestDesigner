@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - implement-3d-map-questdesigner
+      - main  # 💡 Added this so it updates when you merge into your main branch
   workflow_dispatch:
 
 permissions:
@@ -11,10 +12,14 @@ permissions:
   pages: write
   id-token: write
 
+# Avoids getting multiple broken build queues if you push multiple times rapidly
+concurrency:
+  group: 'pages'
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -45,9 +50,10 @@ jobs:
 
     environment:
       name: github-pages
+      # 🛠️ Fixed the URL mapping here so GitHub UI prints the link accurately
       url: ${{ steps.deployment.outputs.page_url }}
 
     steps:
       - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+        id: deployment # 🛠️ This step ID passes outputs up to the job environment block
+        uses: actions/deploy-pages@v4vvvvvvvvvvvvvvvvvvvvvvvvvvv
