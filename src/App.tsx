@@ -2531,20 +2531,20 @@ const mapPointFromClient = (
   clientX: number,
   clientY: number,
   mapMode: WorldMapView,
-) => {plement-3d-map
-    const rect = element.getBoundingClientRect()
-    const normalizedX = ((clientX - rect.left) / rect.width) * WORLD_CANVAS.width
-    const normalizedY = ((clientY - rect.top) / rect.height) * WORLD_CANVAS.height
-    if (mapMode === 'flat') {
-      return {
-        x: clamp(normalizedX, 20, WORLD_CANVAS.width - 20),
-        y: clamp(normalizedY, 20, WORLD_CANVAS.height - 20),
-      }
-    }
+) => {
+  const rect = element.getBoundingClientRect()
+  const normalizedX = ((clientX - rect.left) / rect.width) * WORLD_CANVAS.width
+  const normalizedY = ((clientY - rect.top) / rect.height) * WORLD_CANVAS.height
+  if (mapMode === 'flat') {
     return {
-      ...unprojectMapPoint(normalizedX, normalizedY),
+      x: clamp(normalizedX, 20, WORLD_CANVAS.width - 20),
+      y: clamp(normalizedY, 20, WORLD_CANVAS.height - 20),
     }
   }
+  return {
+    ...unprojectMapPoint(normalizedX, normalizedY),
+  }
+}
 
   const updateLocation = (locationId: string, data: Partial<WorldMapLocation>) => {
     onChange((current) => ({
